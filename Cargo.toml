@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["app", "enclave"]
+members = ["app", "enclave", "untrusted-host"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,7 +25,7 @@ thiserror = "2.0.12"
 
 sgx-ocalls = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
 tls-enclave = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
-untrusted-host = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
+untrusted-host = { path = "untrusted-host" }
 
 alloy-rpc-types-eth = "0.2.0"
 alloy-consensus = "0.2.0"
