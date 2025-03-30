@@ -11,15 +11,11 @@ enclave {
     from "sgx_dcap.edl" import *;
 
     trusted {
-        /* Define the ECALLs to be called by untrusted */
-
-        public sgx_status_t trusted_execution();
+        public sgx_status_t simple_proving();
     };
 
     untrusted {
-        /* Define the OCALLs to be called by trusted */
 
-        void untrusted_execution(int random_number);
     };
 
 };
