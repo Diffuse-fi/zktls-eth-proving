@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["app", "enclave", "mock-lib"]
+members = ["app", "enclave"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,10 +11,29 @@ homepage = "https://www.ata.network/"
 [workspace.dependencies]
 automata-sgx-sdk = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
 automata-build-script = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
-mock-lib = { path = "mock-lib" }
 # Use external libraries in the enclave
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1" }
 hex = "0.4"
-alloy-chains = "=0.1.36"
+clap = "3.2"
+anyhow = "1.0.97"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.0"
+serde = "1"
+serde_json = "1"
+tiny-keccak = "2.0.2"
+primitive-types = "0.13.1"
+thiserror = "2.0.12"
+
+sgx-ocalls = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
+tls-enclave = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
+untrusted-host = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
+
+alloy-rpc-types-eth = "0.2.0"
+alloy-consensus = "0.2.0"
+alloy-rlp = "0.3"
+alloy-primitives = { version = "0.7.7", default-features = false }
+
+rlp = "0.6.1"
+
+[patch.crates-io]
+ring = { git = "https://github.com/automata-network/ring-sgx", rev = "e9b37b8f5a7c3331b21a6650f1ce6653d70d0923" }
 

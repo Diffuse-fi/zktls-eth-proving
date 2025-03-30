@@ -1,46 +1,150 @@
-use automata_sgx_sdk::types::SgxStatus;
-// For most of the cases, you can use the external library directly.
-use serde_json::json;
+mod error;
+mod parse;
+mod tls;
+mod trie;
+mod types;
 
-// Declare the OCALL function. The automata_sgx_sdk will link the OCALL to the mock_lib.
-extern "C" {
-    fn untrusted_execution(random_number: i32);
+use alloy_rpc_types_eth::{Block, EIP1186AccountProofResponse};
+use automata_sgx_sdk::types::SgxStatus;
+use clap::Parser;
+use tiny_keccak::Hasher;
+use tls_enclave::tls_request;
+
+use crate::{
+    parse::extract_body,
+    tls::{ZkTlsStateHeader, ZkTlsStateProof, RPC_DOMAIN},
+    trie::verify_proof,
+    types::RpcResponse,
+};
+
+#[derive(Parser)]
+#[clap(author = "Diffuse", version = "v0", about)]
+struct ZkTlsStateHeaderCli {
+    /// Ethereum address to prove
+    #[clap(
+        long,
+        default_value = "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        help = "Ethereum address"
+    )]
+    address: String,
+
+    /// Storage slot key
+    #[clap(
+        long,
+        default_value = "0x9c7fca54b386399991ce2d6f6fbfc3879e4204c469d179ec0bba12523ed3d44c",
+        help = "Storage slot key"
+    )]
+    storage_slot: String,
+
+    /// Block number for the proof
+    #[clap(
+        long,
+        default_value = "latest",
+        help = "Block number (use 'latest' or hex number like '0x1234AB')"
+    )]
+    block_number: String,
 }
 
-/**
- * This is an ECALL function defined in the edl file.
- * It will be called by the application.
- */
 #[no_mangle]
-pub unsafe extern "C" fn trusted_execution() -> SgxStatus {
-    println!("=============== Trusted execution =================");
-    // Use serde_json to serialize a JSON object
-    let json_object = json!({
-        "sgx": "hello"
-    });
-    println!("Serialized JSON object: {}", json_object);
-    // Mock a random number
-    let random_number = 4;
-    println!("Generated random number: {}", random_number);
-    // Call the untrusted function via OCALL
-    untrusted_execution(random_number);
+pub unsafe extern "C" fn simple_proving() -> SgxStatus {
+    let cli = ZkTlsStateHeaderCli::parse();
 
-    println!("=============== Back to Trusted execution =================");
-    // The following code is used to generate an attestation report
-    // Must be run on sgx-supported machine
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+
+    let zktls_state_get_proof = ZkTlsStateProof::new(
+        RPC_DOMAIN.to_string(),
+        cli.address,
+        cli.storage_slot,
+        cli.block_number.clone(),
+    );
+
+    let response_str = match tls_request(RPC_DOMAIN, zktls_state_get_proof) {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!("Error encountered in TLS request: {e}");
+            return SgxStatus::Unexpected;
+        }
+    };
+
+    let body = match extract_body(&response_str) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("Failed to extract HTTP body: {:?}", e);
+            return SgxStatus::Unexpected;
+        }
+    };
+    let rpc: RpcResponse<EIP1186AccountProofResponse> =
+        serde_json::from_str(&body).expect("Failed to parse JSON into ethers Block");
+
+    let zktls_state_get_header = ZkTlsStateHeader::new(RPC_DOMAIN.to_string(), cli.block_number);
+
+    let response_str = match tls_request(RPC_DOMAIN, zktls_state_get_header) {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!("Error encountered in TLS request: {e}");
+            return SgxStatus::Unexpected;
+        }
+    };
+
+    let body = match extract_body(&response_str) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("Failed to extract HTTP body: {:?}", e);
+            return SgxStatus::Unexpected;
+        }
+    };
+
+    let block: RpcResponse<Block> =
+        serde_json::from_str(&body).expect("Failed to parse JSON into ethers Block");
+
+    let expected_hash = if let Some(hash) = block.result.header.hash {
+        hash
+    } else {
+        tracing::error!("Block hash not found in the response");
+        return SgxStatus::Unexpected;
+    };
+
+    let header = alloy_consensus::Header::try_from(block.result.header.clone())
+        .expect("Failed to convert BlockResult to EvmBlockHeader");
+    tracing::info!("Block header: {:?}", header);
+    let encoded_header = alloy_rlp::encode(&header);
+    let mut keccak256 = tiny_keccak::Keccak::v256();
+    let mut hash = [0u8; 32];
+    keccak256.update(&encoded_header);
+    keccak256.finalize(&mut hash);
+    let a = hex::encode(hash);
+
+    tracing::info!("Hash of the block header: 0x{}", a);
+    tracing::info!("Expected block hash: {}", expected_hash.to_string());
+    assert_eq!(
+        a,
+        expected_hash.to_string()[2..],
+        "Hash of the block header does not match the expected hash"
+    );
+
+    let val = verify_proof(rpc.result, encoded_header);
+
+    if val.is_err() {
+        tracing::error!("Failed to verify proof: {:?}", val);
+        return SgxStatus::Unexpected;
+    } else {
+        tracing::info!("Proof verified successfully");
+        tracing::info!("Value : {:?}", val);
+    }
+
     let data = [0u8; 64];
     let attestation = automata_sgx_sdk::dcap::dcap_quote(data);
-    let result = match attestation {
+    match attestation {
         Ok(attestation) => {
-            println!("DCAP attestation: 0x{}", hex::encode(&attestation));
+            println!("DCAP attestation: 0x{}", hex::encode(attestation));
             SgxStatus::Success
         }
         Err(e) => {
             println!("Generating attestation failed: {:?}", e);
             SgxStatus::Unexpected
         }
-    };
-    println!("=============== End of trusted execution =================");
-
-    result
+    }
 }

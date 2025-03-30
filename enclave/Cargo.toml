@@ -12,8 +12,25 @@ name = "enclave"
 crate-type = ["staticlib"]
 
 [dependencies]
-automata-sgx-sdk = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-hex = { workspace = true }
-alloy-chains = { workspace = true }
+automata-sgx-sdk.workspace = true
+
+hex.workspace = true
+clap = { workspace = true,  features = ["derive"]  }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+sgx-ocalls.workspace = true
+tls-enclave.workspace = true
+serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
+primitive-types = {workspace = true, features = ["serde", "rlp"] }
+anyhow.workspace = true
+tiny-keccak = {workspace = true, features = ["keccak"] }
+thiserror.workspace = true
+
+alloy-rpc-types-eth.workspace = true
+alloy-consensus.workspace = true
+alloy-rlp.workspace = true
+alloy-primitives.workspace = true
+
+rlp.workspace = true
