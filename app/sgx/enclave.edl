@@ -15,7 +15,11 @@ enclave {
     };
 
     untrusted {
+        void ocall_get_tcp_stream([in, string] const char* server_address, [out] void** stream_ptr);
 
+        void ocall_tcp_write([user_check] void* stream_ptr, [in, size=data_len] const uint8_t* data, size_t data_len);
+
+        void ocall_tcp_read([user_check] void* stream_ptr, [out, size=max_len] uint8_t* buffer, size_t max_len, [out] size_t* read_len);
     };
 
 };
