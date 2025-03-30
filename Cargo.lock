@@ -3418,6 +3418,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 [[package]]
 name = "untrusted-host"
 version = "0.1.0"
+source = "git+https://github.com/Diffuse-fi/zktls-enclave?rev=2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a#2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a"
 dependencies = [
  "tracing",
 ]
