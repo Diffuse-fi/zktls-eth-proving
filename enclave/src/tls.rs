@@ -112,7 +112,7 @@ impl ZkTlsStateProof {
             panic!("Failed to create TCP stream");
         }
 
-        crate::tls::ZkTlsStateProof {
+        ZkTlsStateProof {
             server_address,
             stream_ptr: TcpStreamOc::new(stream_ptr),
             eth_address,
@@ -122,7 +122,7 @@ impl ZkTlsStateProof {
     }
 }
 
-impl<S: AsRef<str>> RequestProvider<S> for crate::tls::ZkTlsStateProof {
+impl<S: AsRef<str>> RequestProvider<S> for ZkTlsStateProof {
     fn get_request(&self, _server_name: S) -> Vec<u8> {
         let payload = format!(
             r#"{{"jsonrpc":"2.0","method":"eth_getProof","params":["{}",["{}"],"{}"],"id":1}}"#,

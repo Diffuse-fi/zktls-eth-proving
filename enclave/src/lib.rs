@@ -1,20 +1,17 @@
 mod error;
-mod parse;
 mod tls;
 mod trie;
-mod types;
+mod utils;
 
 use alloy_rpc_types_eth::{Block, EIP1186AccountProofResponse};
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
-use tiny_keccak::Hasher;
 use tls_enclave::tls_request;
 
 use crate::{
-    parse::extract_body,
     tls::{ZkTlsStateHeader, ZkTlsStateProof, RPC_DOMAIN},
     trie::verify_proof,
-    types::RpcResponse,
+    utils::{extract_body, keccak256, RpcResponse},
 };
 
 #[derive(Parser)]
@@ -51,7 +48,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let zktls_state_get_proof = ZkTlsStateProof::new(
@@ -60,7 +56,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         cli.storage_slot,
         cli.block_number.clone(),
     );
-
     let response_str = match tls_request(RPC_DOMAIN, zktls_state_get_proof) {
         Ok(response) => response,
         Err(e) => {
@@ -68,7 +63,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             return SgxStatus::Unexpected;
         }
     };
-
     let body = match extract_body(&response_str) {
         Ok(b) => b,
         Err(e) => {
@@ -76,11 +70,10 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             return SgxStatus::Unexpected;
         }
     };
-    let rpc: RpcResponse<EIP1186AccountProofResponse> =
+    let proof_response: RpcResponse<EIP1186AccountProofResponse> =
         serde_json::from_str(&body).expect("Failed to parse JSON into ethers Block");
 
     let zktls_state_get_header = ZkTlsStateHeader::new(RPC_DOMAIN.to_string(), cli.block_number);
-
     let response_str = match tls_request(RPC_DOMAIN, zktls_state_get_header) {
         Ok(response) => response,
         Err(e) => {
@@ -88,7 +81,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             return SgxStatus::Unexpected;
         }
     };
-
     let body = match extract_body(&response_str) {
         Ok(b) => b,
         Err(e) => {
@@ -96,7 +88,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             return SgxStatus::Unexpected;
         }
     };
-
     let block: RpcResponse<Block> =
         serde_json::from_str(&body).expect("Failed to parse JSON into ethers Block");
 
@@ -107,25 +98,20 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         return SgxStatus::Unexpected;
     };
 
-    let header = alloy_consensus::Header::try_from(block.result.header.clone())
+    let header = alloy_consensus::Header::try_from(block.result.header)
         .expect("Failed to convert BlockResult to EvmBlockHeader");
-    tracing::info!("Block header: {:?}", header);
+    tracing::debug!("Block header: {:?}", header);
     let encoded_header = alloy_rlp::encode(&header);
-    let mut keccak256 = tiny_keccak::Keccak::v256();
-    let mut hash = [0u8; 32];
-    keccak256.update(&encoded_header);
-    keccak256.finalize(&mut hash);
-    let a = hex::encode(hash);
+    let hash = keccak256(&encoded_header);
 
-    tracing::info!("Hash of the block header: 0x{}", a);
-    tracing::info!("Expected block hash: {}", expected_hash.to_string());
+    tracing::debug!("Hash of the block header: 0x{}", hex::encode(hash));
+    tracing::debug!("Expected block hash: {}", expected_hash);
     assert_eq!(
-        a,
-        expected_hash.to_string()[2..],
+        hash, expected_hash,
         "Hash of the block header does not match the expected hash"
     );
 
-    let val = verify_proof(rpc.result, encoded_header);
+    let val = verify_proof(proof_response.result, encoded_header);
 
     if val.is_err() {
         tracing::error!("Failed to verify proof: {:?}", val);

@@ -1,14 +1,35 @@
 use alloy_rpc_types_eth::EIP1186AccountProofResponse;
 use anyhow::{anyhow, Result};
 use rlp::Rlp;
-use tiny_keccak::{Hasher, Keccak};
 
-fn keccak256(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Keccak::v256();
-    hasher.update(data);
-    let mut res = [0u8; 32];
-    hasher.finalize(&mut res);
-    res
+use crate::utils::keccak256;
+
+pub fn verify_proof(
+    resp: EIP1186AccountProofResponse,
+    enc_block_header: Vec<u8>,
+) -> Result<String> {
+    let rlp_enc_block_header = Rlp::new(&enc_block_header);
+    let state_root = rlp_enc_block_header.at(3)?.data()?;
+
+    tracing::info!("Extracted state_root: {}", hex::encode(state_root));
+
+    // 1. Verify the account proof
+    let address = resp.address.0.as_slice();
+    let storage_root = verify_account_proof(&resp, state_root, address)?;
+
+    // 2. Verify the storage proof
+    let value = verify_storage_proof(&resp, &storage_root)?;
+
+    // 3. Verify the block header
+    verify_block_header(state_root, &enc_block_header)?;
+
+    // 4. Decode the value
+    let bytes = hex::decode(value).expect("Invalid hex in RLP encoded string");
+    let rlp = Rlp::new(&bytes);
+    // TODO: u64 is not the correct type for the value
+    let decoded: u64 = rlp.as_val().expect("Failed to decode RLP");
+
+    Ok(decoded.to_string())
 }
 
 fn verify_account_proof(
@@ -36,7 +57,6 @@ fn verify_account_proof(
         let node_hash = keccak256(node_bytes);
 
         if i == 0 {
-            tracing::info!("First node RLP: {}", hex::encode(node_bytes));
             tracing::info!("Computed hash: {}", hex::encode(node_hash));
             tracing::info!("Expected state_root: {}", hex::encode(state_root));
             if node_bytes.len() < 32 {
@@ -68,13 +88,13 @@ fn verify_account_proof(
             let value_decoded = Rlp::new(leaf_node[1].data().unwrap());
             assert!(value_decoded.is_list());
 
-            tracing::info!("Value 1111: {:?}", value_decoded);
+            let storage_root = value_decoded.iter().collect::<Vec<_>>()[2].data()?;
             assert_eq!(
                 proof.storage_hash.0.as_slice(),
-                value_decoded.iter().collect::<Vec<_>>()[2].data()?,
+                storage_root,
                 "Account storage root does not match"
             );
-            return Ok(value_decoded.iter().collect::<Vec<_>>()[2].data()?.to_vec());
+            return Ok(storage_root.to_vec());
         }
     }
     Err(anyhow!("Failed to verify account proof"))
@@ -83,10 +103,10 @@ fn verify_account_proof(
 fn verify_storage_proof(
     proof: &EIP1186AccountProofResponse,
     storage_root: &[u8],
-) -> anyhow::Result<String> {
+) -> Result<String> {
     let mut current_hash = storage_root.to_vec();
 
-    let storage_key_bytes = &proof.storage_proof[0].key.0 .0;
+    let storage_key_bytes = proof.storage_proof[0].key.0.as_slice();
     let key_hash_bytes = keccak256(storage_key_bytes);
     let storage_key_hash = hex::encode(key_hash_bytes);
     let key_nibbles = storage_key_hash
@@ -94,12 +114,12 @@ fn verify_storage_proof(
         .map(|x| x.to_digit(16).unwrap() as usize)
         .collect::<Vec<_>>();
 
-    let a = proof.storage_proof[0]
+    let storage_proof_str = proof.storage_proof[0]
         .proof
         .iter()
         .map(|element| element.to_string())
         .collect::<Vec<String>>();
-    let key_ptrs = get_key_ptrs(a);
+    let key_ptrs = get_key_ptrs(storage_proof_str);
 
     for (i, p) in proof.storage_proof[0].proof.iter().enumerate() {
         let node_bytes = p.as_ref();
@@ -123,7 +143,7 @@ fn verify_storage_proof(
                     } else {
                         current_hash = next_node.as_raw().to_vec();
                     }
-                },
+                }
                 x => {
                     if x <= 2 {
                         return Err(anyhow!("Invalid node count"));
@@ -155,39 +175,12 @@ fn verify_storage_proof(
 
 fn verify_block_header(storage_root: &[u8], enc_block_header: &[u8]) -> Result<()> {
     let rlp_enc_block_header = Rlp::new(enc_block_header);
-    let rlp_state_root = rlp_enc_block_header.at(3)?;
-    let rlp_state_root = rlp_state_root.data()?;
+    let rlp_state_root = rlp_enc_block_header.at(3)?.data()?;
     assert_eq!(rlp_state_root, storage_root);
     Ok(())
 }
-pub fn verify_proof(
-    resp: EIP1186AccountProofResponse,
-    enc_block_header: Vec<u8>,
-) -> Result<String> {
-    let rlp_enc_block_header = Rlp::new(&enc_block_header);
-    let state_root = rlp_enc_block_header.at(3)?.data()?;
 
-    tracing::info!("Extracted state_root: {}", hex::encode(state_root));
-    let address = resp.address.0.as_slice();
-
-    let storage_root = verify_account_proof(&resp, state_root, address)?;
-
-    let value = verify_storage_proof(&resp, &storage_root)?;
-
-
-    verify_block_header(state_root, &enc_block_header)?;
-
-    let bytes = hex::decode(value).expect("Invalid hex in RLP encoded string");
-
-    let rlp = Rlp::new(&bytes);
-    let decoded: u64 = rlp.as_val().expect("Failed to decode RLP");
-
-    tracing::info!("Proof verified successfully");
-    tracing::info!("Value: {:#x}", decoded);
-    Ok(decoded.to_string())
-}
-
-pub fn get_key_ptrs(proof: Vec<String>) -> Vec<usize> {
+fn get_key_ptrs(proof: Vec<String>) -> Vec<usize> {
     let mut result = Vec::<usize>::new();
     let mut key_index = 0;
 
