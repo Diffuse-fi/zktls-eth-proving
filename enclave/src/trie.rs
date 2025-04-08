@@ -60,6 +60,7 @@ fn verify_account_proof(
             tracing::info!("Computed hash: {}", hex::encode(node_hash));
             tracing::info!("Expected state_root: {}", hex::encode(state_root));
             if node_bytes.len() < 32 {
+                // TODO: is it irrelevant?
                 assert_eq!(
                     node_bytes, state_root,
                     "Inlined first node does not match state_root"
