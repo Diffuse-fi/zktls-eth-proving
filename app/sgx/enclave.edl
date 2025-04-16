@@ -20,6 +20,13 @@ enclave {
         void ocall_tcp_write([user_check] void* stream_ptr, [in, size=data_len] const uint8_t* data, size_t data_len);
 
         void ocall_tcp_read([user_check] void* stream_ptr, [out, size=max_len] uint8_t* buffer, size_t max_len, [out] size_t* read_len);
+
+        void ocall_write_to_file(
+            [in, size=response_json_len] char* response_json_bytes,
+            size_t response_json_len,
+            [in, size=filename_len] char* filename_bytes,
+            size_t filename_len
+        );
     };
 
 };
