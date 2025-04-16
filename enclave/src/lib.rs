@@ -7,13 +7,13 @@ use alloy_primitives::{BlockNumber, B256};
 use alloy_rpc_types_eth::{Block, EIP1186AccountProofResponse};
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
-use sgx_ocalls::bindings::ocall_write_to_file;
+// use sgx_ocalls::bindings::ocall_write_to_file;
 use tls_enclave::tls_request;
 
 use crate::{
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{extract_body, keccak256, reassemble_message, RpcResponse},
+    utils::{extract_body, keccak256, reassemble_message, ProvingOutput, RpcResponse},
 };
 
 #[derive(Parser, Debug)]
@@ -170,6 +170,14 @@ fn verify() -> anyhow::Result<Vec<u8>> {
     match attestation {
         Ok(attestation) => {
             tracing::info!("DCAP attestation: 0x{}", hex::encode(&attestation));
+
+            let result = ProvingOutput {
+                eth_amount: hex::encode(&msg.eth_amount),
+                storage_slot2: hex::encode(&msg.other_full),
+                sgx_quote: hex::encode(&attestation),
+            };
+
+            println!("{}", serde_json::to_string(&result)?);
             Ok(attestation)
         }
         Err(e) => {
@@ -242,11 +250,4 @@ fn get_proof(
     tracing::debug!("Proof response: {:?}", proof_response.result);
 
     Ok(proof_response.result)
-}
-
-fn create_buffer_from_stirng(mut input: String) -> Vec<u8> {
-    while input.len() % 8 != 0 {
-        input.push('\0');
-    }
-    input.into_bytes()
 }
