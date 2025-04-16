@@ -70,3 +70,70 @@ pub struct RpcResponse<T> {
     id: u32,
     pub(crate) result: T,
 }
+
+fn decode_storage_slot(input: &[u8]) -> [u8; 32] {
+    if input.len() == 1 && input[0] <= 0x7f {
+        let mut out = [0u8; 32];
+        out[31] = input[0];
+        return out;
+    }
+    if !input.is_empty() && input[0] >= 0x80 && input[0] <= 0xb7 {
+        let content_len = (input[0] - 0x80) as usize;
+        if input.len() < 1 + content_len {
+            panic!("Invalid RLP encoding: insufficient length");
+        }
+        let content = &input[1..1 + content_len];
+        let mut out = [0u8; 32];
+        out[32 - content.len()..].copy_from_slice(content);
+        return out;
+    }
+    let mut out = [0u8; 32];
+    if input.len() <= 32 {
+        out[32 - input.len()..].copy_from_slice(input);
+    } else {
+        panic!("Storage slot exceeds 32 bytes");
+    }
+    out
+}
+
+// v0.1 specific!
+#[derive(Debug)]
+pub(crate) struct MessageData {
+    eth_amount: [u8; 32],
+    empty: u8, // always 0
+    func: u8,
+    nonce: [u8; 10],
+    depositor: [u8; 20],
+}
+
+impl MessageData {
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let mut data = [0u8; 64];
+
+        data[0..32].copy_from_slice(&self.eth_amount);
+        data[32] = self.empty;
+        data[33] = self.func;
+        data[34..44].copy_from_slice(&self.nonce);
+        data[44..64].copy_from_slice(&self.depositor);
+        data
+    }
+}
+
+pub(crate) fn reassemble_message(eth_slot_raw: &[u8], other_slot_raw: &[u8]) -> MessageData {
+    let eth_amount_full = decode_storage_slot(eth_slot_raw);
+    let other_full = decode_storage_slot(other_slot_raw);
+    let empty = other_full[0];
+    let func = other_full[1];
+    let mut nonce = [0u8; 10];
+    nonce.copy_from_slice(&other_full[2..12]);
+    let mut depositor = [0u8; 20];
+    depositor.copy_from_slice(&other_full[12..32]);
+
+    MessageData {
+        eth_amount: eth_amount_full,
+        empty,
+        func,
+        nonce,
+        depositor,
+    }
+}

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use alloy_primitives::B256;
 use alloy_rpc_types_eth::EIP1186AccountProofResponse;
 use rlp::Rlp;
@@ -12,7 +10,7 @@ use crate::{
 pub fn verify_proof(
     resp: EIP1186AccountProofResponse,
     enc_block_header: Vec<u8>,
-) -> ProofVerificationResult<HashMap<B256, Option<String>>> {
+) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
     let rlp_enc_block_header = Rlp::new(&enc_block_header);
     let state_root = rlp_enc_block_header.at(3)?.data()?;
 
@@ -101,8 +99,8 @@ fn verify_account_proof(
 fn verify_storage_proof(
     proof: &EIP1186AccountProofResponse,
     storage_root: &[u8],
-) -> ProofVerificationResult<HashMap<B256, Option<String>>> {
-    let mut values = HashMap::new();
+) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
+    let mut values = Vec::new();
 
     for proof in proof.storage_proof.iter() {
         let mut current_hash = storage_root.to_vec();
@@ -163,14 +161,13 @@ fn verify_storage_proof(
                 let value_decoded = decoded.at(1)?;
                 assert!(value_decoded.is_data());
                 let raw = value_decoded.as_raw();
-                let inner: Vec<u8> = rlp::decode(raw)?;
-                let value = hex::encode(inner);
+                let value: Vec<u8> = rlp::decode(raw)?;
 
-                values.insert(proof.key.0, Some(value));
+                values.push((proof.key.0, Some(value)));
             }
         }
-        if values.get(&proof.key.0).is_none() {
-            values.insert(proof.key.0, None);
+        if !values.iter().any(|(k, _)| *k == proof.key.0) {
+            values.push((proof.key.0, None));
         }
     }
 

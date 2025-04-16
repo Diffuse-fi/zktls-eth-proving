@@ -7,12 +7,13 @@ use alloy_primitives::{BlockNumber, B256};
 use alloy_rpc_types_eth::{Block, EIP1186AccountProofResponse};
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
+use sgx_ocalls::bindings::ocall_write_to_file;
 use tls_enclave::tls_request;
 
 use crate::{
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{extract_body, keccak256, RpcResponse},
+    utils::{extract_body, keccak256, reassemble_message, RpcResponse},
 };
 
 #[derive(Parser, Debug)]
@@ -47,9 +48,8 @@ struct ZkTlsProverCli {
     #[clap(
         long,
         short,
-        min_values = 1,
+        min_values = 0,
         value_delimiter = ' ',
-        default_value = "0x9c7fca54b386399991ce2d6f6fbfc3879e4204c469d179ec0bba12523ed3d44c",
         help = "Storage slot key(s) (hex format, space-separated)"
     )]
     storage_slots: Vec<String>,
@@ -67,8 +67,15 @@ struct ZkTlsProverCli {
 #[no_mangle]
 pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     match verify() {
-        Ok(()) => {
+        Ok(attestation) => {
             tracing::info!("Proving process completed successfully.");
+            let filename_bytes = create_buffer_from_stirng("sgx_quote.bin".to_string());
+            ocall_write_to_file(
+                attestation.as_ptr(),
+                attestation.len(),
+                filename_bytes.as_ptr(),
+                filename_bytes.len(),
+            );
             SgxStatus::Success
         }
         Err(e) => {
@@ -78,7 +85,7 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     }
 }
 
-fn verify() -> anyhow::Result<()> {
+fn verify() -> anyhow::Result<Vec<u8>> {
     let cli = ZkTlsProverCli::parse();
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -131,21 +138,38 @@ fn verify() -> anyhow::Result<()> {
 
     tracing::info!("Verifying proofs...");
     let verified_values = verify_proof(proof_response, encoded_header)?;
-
     tracing::info!("Proof verification successful!");
-    for (slot, value_opt) in &verified_values {
-        match value_opt {
-            Some(value) => tracing::info!("  Slot {}: Value {}", slot, value),
-            None => tracing::info!("  Slot {}: Value is zero/empty", slot),
-        }
+
+    // v0.1 specific!
+    let slots: Vec<(B256, Vec<u8>)> = verified_values
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect();
+
+    if slots.len() != 2 {
+        return Err(anyhow::anyhow!(
+            "Expected 2 storage slots, but got {}",
+            slots.len()
+        ));
     }
 
-    let data = [0u8; 64];
+    let eth_amount_raw = &slots[0].1;
+    let other_slot_raw = &slots[1].1;
+
+    tracing::info!(
+        "Raw data: eth_amount_raw = 0x{}, other_slot_raw = 0x{}",
+        hex::encode(eth_amount_raw),
+        hex::encode(other_slot_raw)
+    );
+
+    let msg = reassemble_message(eth_amount_raw, other_slot_raw);
+    tracing::info!("Reassembled message: {:?}", msg);
+    let data = msg.to_bytes();
     let attestation = automata_sgx_sdk::dcap::dcap_quote(data);
     match attestation {
         Ok(attestation) => {
-            tracing::info!("DCAP attestation: 0x{}", hex::encode(attestation));
-            Ok(())
+            tracing::info!("DCAP attestation: 0x{}", hex::encode(&attestation));
+            Ok(attestation)
         }
         Err(e) => {
             tracing::error!("Generating attestation failed: {:?}", e);
@@ -217,4 +241,11 @@ fn get_proof(
     tracing::debug!("Proof response: {:?}", proof_response.result);
 
     Ok(proof_response.result)
+}
+
+fn create_buffer_from_stirng(mut input: String) -> Vec<u8> {
+    while input.len() % 8 != 0 {
+        input.push('\0');
+    }
+    input.into_bytes()
 }
