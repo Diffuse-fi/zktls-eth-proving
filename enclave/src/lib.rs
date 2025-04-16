@@ -67,15 +67,16 @@ struct ZkTlsProverCli {
 #[no_mangle]
 pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     match verify() {
-        Ok(attestation) => {
+        Ok(_attestation) => {
             tracing::info!("Proving process completed successfully.");
-            let filename_bytes = create_buffer_from_stirng("sgx_quote.bin".to_string());
-            ocall_write_to_file(
-                attestation.as_ptr(),
-                attestation.len(),
-                filename_bytes.as_ptr(),
-                filename_bytes.len(),
-            );
+            // TODO: decide on how we store the attestation
+            // let filename_bytes = create_buffer_from_stirng("sgx_quote.bin".to_string());
+            // ocall_write_to_file(
+            //     attestation.as_ptr(),
+            //     attestation.len(),
+            //     filename_bytes.as_ptr(),
+            //     filename_bytes.len(),
+            // );
             SgxStatus::Success
         }
         Err(e) => {
@@ -89,7 +90,7 @@ fn verify() -> anyhow::Result<Vec<u8>> {
     let cli = ZkTlsProverCli::parse();
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off"));
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     if cli.rpc_path.is_none() && cli.alchemy_api_key.is_none() {
