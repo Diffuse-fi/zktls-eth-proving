@@ -61,7 +61,7 @@ fn decode_chunked(chunked: &[u8]) -> Result<String> {
     })?)
 }
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
@@ -99,11 +99,22 @@ fn decode_storage_slot(input: &[u8]) -> [u8; 32] {
 // v0.1 specific!
 #[derive(Debug)]
 pub(crate) struct MessageData {
-    eth_amount: [u8; 32],
+    pub(crate) eth_amount: [u8; 32],
+    pub(crate) other_full: [u8; 32],
     empty: u8, // always 0
     func: u8,
     nonce: [u8; 10],
     depositor: [u8; 20],
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProvingOutput {
+    /// Hex‑encoded 32‑byte value for `eth_amount`
+    pub eth_amount: String,
+    /// Hex‑encoded 32‑byte value for `storage_slot2`
+    pub storage_slot2: String,
+    /// Hex‑encoded sgx_quote (variable length bytes)
+    pub sgx_quote: String,
 }
 
 impl MessageData {
@@ -131,6 +142,7 @@ pub(crate) fn reassemble_message(eth_slot_raw: &[u8], other_slot_raw: &[u8]) -> 
 
     MessageData {
         eth_amount: eth_amount_full,
+        other_full,
         empty,
         func,
         nonce,
