@@ -1,8 +1,12 @@
-use std::io::{BufRead, BufReader, Cursor, Read};
+use std::io::{BufRead, Read};
 
 use anyhow::Result;
 use automata_sgx_sdk::types::SgxStatus;
+use ruint::aliases::U256 as RuintU256;
+use serde::Deserialize;
 use tiny_keccak::{Hasher, Keccak};
+
+use crate::{attestation_data::AttestationPayload, eth::primitives::B256};
 
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut res = [0u8; 32];
@@ -13,139 +17,122 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
 }
 
 pub(crate) fn extract_body(response: &str) -> Result<String> {
-    let parts: Vec<&str> = response.split("\r\n\r\n").collect();
-    if parts.len() < 2 {
-        return Err(SgxStatus::Unexpected.into());
-    }
-
-    let headers = parts[0];
-    let body = parts[1];
+    let mut parts = response.splitn(2, "\r\n\r\n");
+    let headers = parts.next().ok_or(SgxStatus::Unexpected)?;
+    let body = parts.next().ok_or(SgxStatus::Unexpected)?;
 
     if headers.contains("Transfer-Encoding: chunked") {
-        decode_chunked(body.as_bytes()).map_err(|_| SgxStatus::Unexpected.into())
+        decode_chunked_body(body)
     } else {
         Ok(body.to_string())
     }
 }
 
-fn decode_chunked(chunked: &[u8]) -> Result<String> {
-    let mut reader = BufReader::new(Cursor::new(chunked));
+fn decode_chunked_body(body: &str) -> Result<String> {
+    let mut reader = std::io::BufReader::new(body.as_bytes());
     let mut decoded = Vec::new();
-
     loop {
-        let mut chunk_size_line = String::new();
-        reader.read_line(&mut chunk_size_line)?;
-
-        let chunk_size_line = chunk_size_line.trim();
-
-        if chunk_size_line.is_empty() {
+        let mut chunk_size_hex = String::new();
+        reader.read_line(&mut chunk_size_hex)?;
+        let chunk_size_hex = chunk_size_hex.trim();
+        if chunk_size_hex.is_empty() {
             continue;
         }
-
-        let chunk_size = usize::from_str_radix(chunk_size_line, 16)?;
-
+        let chunk_size = usize::from_str_radix(chunk_size_hex, 16)?;
         if chunk_size == 0 {
             break;
         }
-
-        let mut chunk = vec![0u8; chunk_size];
-        reader.read_exact(&mut chunk)?;
-        decoded.extend_from_slice(&chunk);
-
+        let mut chunk_data = vec![0u8; chunk_size];
+        reader.read_exact(&mut chunk_data)?;
+        decoded.extend_from_slice(&chunk_data);
         let mut crlf = [0u8; 2];
         reader.read_exact(&mut crlf)?;
     }
-
-    Ok(String::from_utf8(decoded).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 sequence")
-    })?)
+    String::from_utf8(decoded)
+        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 sequence in chunked body: {}", e))
 }
-
-use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
-pub struct RpcResponse<T> {
+pub(crate) struct RpcResponse<T> {
     jsonrpc: String,
-    id: u32,
+    id: serde_json::Value,
     pub(crate) result: T,
 }
 
-fn decode_storage_slot(input: &[u8]) -> [u8; 32] {
-    if input.len() == 1 && input[0] <= 0x7f {
-        let mut out = [0u8; 32];
-        out[31] = input[0];
-        return out;
-    }
-    if !input.is_empty() && input[0] >= 0x80 && input[0] <= 0xb7 {
-        let content_len = (input[0] - 0x80) as usize;
-        if input.len() < 1 + content_len {
-            panic!("Invalid RLP encoding: insufficient length");
+pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8; 64]> {
+    let mut report_data = [0u8; 64];
+    report_data[0..32].copy_from_slice(payload.block_hash.as_ref());
+
+    if !payload.proven_slots.is_empty() {
+        let mut concatenated_value_hashes = Vec::new();
+        for slot_data in &payload.proven_slots {
+            concatenated_value_hashes.extend_from_slice(slot_data.value_hash.as_ref());
         }
-        let content = &input[1..1 + content_len];
-        let mut out = [0u8; 32];
-        out[32 - content.len()..].copy_from_slice(content);
-        return out;
+        let slot_commitment_hash = keccak256(&concatenated_value_hashes);
+        report_data[32..64].copy_from_slice(&slot_commitment_hash);
     }
-    let mut out = [0u8; 32];
-    if input.len() <= 32 {
-        out[32 - input.len()..].copy_from_slice(input);
+    Ok(report_data)
+}
+
+const BASE_SLOT_STR: &str =
+    "0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b";
+const ELEMENT_SLOT_COUNT_FOR_MESSAGE: usize = 2;
+
+pub(crate) fn storage_keys_for_message(message_index: u64) -> Result<(B256, B256)> {
+    let base_slot_u256 =
+        RuintU256::from_str_radix(BASE_SLOT_STR.trim_start_matches("0x"), 16)
+            .map_err(|e| anyhow::anyhow!("Failed to parse ANOMALOUS_BASE_SLOT_STR: {:?}", e))?;
+
+    let element_slot_count_u256 = RuintU256::from(ELEMENT_SLOT_COUNT_FOR_MESSAGE);
+    let message_index_u256 = RuintU256::from(message_index);
+
+    let offset0 = message_index_u256 * element_slot_count_u256;
+    let slot_one_u256 = base_slot_u256 + offset0;
+    let slot_one_key: B256 = slot_one_u256.to_be_bytes().into();
+
+    let offset1 = offset0 + RuintU256::from(1);
+    let slot_two_u256 = base_slot_u256 + offset1;
+    let slot_two_key: B256 = slot_two_u256.to_be_bytes().into();
+
+    tracing::debug!(
+        message_index,
+        slot_one = ?slot_one_key,
+        slot_two = ?slot_two_key,
+        "Calculated anomalous storage keys"
+    );
+
+    Ok((slot_one_key, slot_two_key))
+}
+
+pub(crate) fn get_semantic_u256_bytes(bytes_after_first_mpt_decode: &[u8]) -> Result<[u8; 32]> {
+    let final_bytes: Vec<u8>;
+
+    if bytes_after_first_mpt_decode.is_empty() {
+        final_bytes = Vec::new();
+    } else if bytes_after_first_mpt_decode.len() == 1 && bytes_after_first_mpt_decode[0] < 0x80 {
+        final_bytes = bytes_after_first_mpt_decode.to_vec();
     } else {
-        panic!("Storage slot exceeds 32 bytes");
+        match rlp::decode::<Vec<u8>>(bytes_after_first_mpt_decode) {
+            Ok(decoded_inner) => {
+                final_bytes = decoded_inner;
+            }
+            Err(_) => {
+                final_bytes = bytes_after_first_mpt_decode.to_vec();
+            }
+        }
     }
-    out
-}
 
-// v0.1 specific!
-#[derive(Debug)]
-pub(crate) struct MessageData {
-    pub(crate) eth_amount: [u8; 32],
-    pub(crate) other_full: [u8; 32],
-    empty: u8, // always 0
-    func: u8,
-    nonce: [u8; 10],
-    depositor: [u8; 20],
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ProvingOutput {
-    /// Hex‑encoded 32‑byte value for `eth_amount`
-    pub eth_amount: String,
-    /// Hex‑encoded 32‑byte value for `storage_slot2`
-    pub storage_slot2: String,
-    /// Hex‑encoded sgx_quote (variable length bytes)
-    pub sgx_quote: String,
-}
-
-impl MessageData {
-    pub fn to_bytes(&self) -> [u8; 64] {
-        let mut data = [0u8; 64];
-
-        data[0..32].copy_from_slice(&self.eth_amount);
-        data[32] = self.empty;
-        data[33] = self.func;
-        data[34..44].copy_from_slice(&self.nonce);
-        data[44..64].copy_from_slice(&self.depositor);
-        data
+    let mut padded_value = [0u8; 32];
+    let len = final_bytes.len();
+    if len > 32 {
+        return Err(anyhow::anyhow!(
+            "Final semantic numeric value 0x{} is longer than 32 bytes (length: {})",
+            hex::encode(final_bytes),
+            len
+        ));
     }
-}
-
-pub(crate) fn reassemble_message(eth_slot_raw: &[u8], other_slot_raw: &[u8]) -> MessageData {
-    let eth_amount_full = decode_storage_slot(eth_slot_raw);
-    let other_full = decode_storage_slot(other_slot_raw);
-    let empty = other_full[0];
-    let func = other_full[1];
-    let mut nonce = [0u8; 10];
-    nonce.copy_from_slice(&other_full[2..12]);
-    let mut depositor = [0u8; 20];
-    depositor.copy_from_slice(&other_full[12..32]);
-
-    MessageData {
-        eth_amount: eth_amount_full,
-        other_full,
-        empty,
-        func,
-        nonce,
-        depositor,
-    }
+    let start_index = 32_usize.saturating_sub(len);
+    padded_value[start_index..].copy_from_slice(&final_bytes);
+    Ok(padded_value)
 }

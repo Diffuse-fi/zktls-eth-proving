@@ -5,6 +5,9 @@ pub(crate) enum ProofVerificationError {
     #[error("Account proof verification failed unexpectedly")]
     AccountProofFailed,
 
+    #[error(transparent)]
+    Hex(#[from] hex::FromHexError),
+
     #[error("Storage proof verification failed: Unexpected node structure at depth {0}")]
     StorageProofInvalidNode(usize),
 
