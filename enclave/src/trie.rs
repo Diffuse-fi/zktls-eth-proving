@@ -1,44 +1,39 @@
-use alloy_primitives::B256;
-use alloy_rpc_types_eth::EIP1186AccountProofResponse;
 use rlp::Rlp;
 
 use crate::{
     error::{ProofVerificationError, ProofVerificationResult},
+    eth::{primitives::B256, proof::ProofResponse},
     utils::keccak256,
 };
 
 pub fn verify_proof(
-    resp: EIP1186AccountProofResponse,
-    enc_block_header: Vec<u8>,
+    resp: ProofResponse,
+    state_root: &[u8],
 ) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
-    let rlp_enc_block_header = Rlp::new(&enc_block_header);
-    let state_root = rlp_enc_block_header.at(3)?.data()?;
-
     // 1. Verify the account proof
     let address = resp.address.0.as_slice();
     let storage_root = verify_account_proof(&resp, state_root, address)?;
 
+    assert_eq!(
+        resp.storage_hash.0.as_slice(),
+        storage_root,
+        "Account storage root does not match"
+    );
+
     // 2. Verify the storage proof
     let values = verify_storage_proof(&resp, &storage_root)?;
-
-    // 3. Verify the block header
-    verify_block_header(state_root, &enc_block_header)?;
 
     Ok(values)
 }
 
 fn verify_account_proof(
-    proof: &EIP1186AccountProofResponse,
+    proof: &ProofResponse,
     state_root: &[u8],
     address: &[u8],
 ) -> ProofVerificationResult<Vec<u8>> {
     let mut current_hash = state_root.to_vec();
     let depth_ap = proof.account_proof.len();
-    let account_path_as_str = proof
-        .account_proof
-        .iter()
-        .map(|element| format!("0x{}", hex::encode(element.as_ref())))
-        .collect::<Vec<String>>();
+    let account_path_as_str = proof.account_proof.clone();
 
     let address_hash = hex::encode(keccak256(address));
     let account_key_nibbles = address_hash
@@ -48,7 +43,8 @@ fn verify_account_proof(
     let account_key_ptrs = get_key_ptrs(account_path_as_str);
 
     for (i, p) in proof.account_proof.iter().enumerate() {
-        let node_bytes = p.as_ref();
+        let proof_bytes = hex::decode(p.strip_prefix("0x").unwrap())?;
+        let node_bytes = proof_bytes.as_ref();
         let node_hash = keccak256(node_bytes);
 
         if i == 0 {
@@ -97,7 +93,7 @@ fn verify_account_proof(
 }
 
 fn verify_storage_proof(
-    proof: &EIP1186AccountProofResponse,
+    proof: &ProofResponse,
     storage_root: &[u8],
 ) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
     let mut values = Vec::new();
@@ -112,15 +108,13 @@ fn verify_storage_proof(
             .map(|x| x.to_digit(16).unwrap() as usize)
             .collect::<Vec<_>>();
 
-        let storage_proof_str = proof
-            .proof
-            .iter()
-            .map(|element| element.to_string())
-            .collect::<Vec<String>>();
+        let storage_proof_str = proof.proof.clone();
+
         let key_ptrs = get_key_ptrs(storage_proof_str);
 
         for (i, p) in proof.proof.iter().enumerate() {
-            let node_bytes = p.as_ref();
+            let proof_bytes = hex::decode(p.strip_prefix("0x").unwrap())?;
+            let node_bytes = proof_bytes.as_ref();
             let node_hash = keccak256(node_bytes);
 
             if node_bytes.len() < 32 {
@@ -163,25 +157,15 @@ fn verify_storage_proof(
                 let raw = value_decoded.as_raw();
                 let value: Vec<u8> = rlp::decode(raw)?;
 
-                values.push((proof.key.0, Some(value)));
+                values.push((proof.key, Some(value)));
             }
         }
-        if !values.iter().any(|(k, _)| *k == proof.key.0) {
-            values.push((proof.key.0, None));
+        if !values.iter().any(|(k, _)| *k == proof.key) {
+            values.push((proof.key, None));
         }
     }
 
     Ok(values)
-}
-
-fn verify_block_header(
-    storage_root: &[u8],
-    enc_block_header: &[u8],
-) -> ProofVerificationResult<()> {
-    let rlp_enc_block_header = Rlp::new(enc_block_header);
-    let rlp_state_root = rlp_enc_block_header.at(3)?.data()?;
-    assert_eq!(rlp_state_root, storage_root);
-    Ok(())
 }
 
 fn get_key_ptrs(proof: Vec<String>) -> Vec<usize> {

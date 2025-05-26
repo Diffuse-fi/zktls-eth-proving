@@ -23,14 +23,14 @@ sgx-ocalls.workspace = true
 tls-enclave.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
-primitive-types = {workspace = true, features = ["serde", "rlp"] }
+serde_with = { workspace = true, default-features = false, features = ["macros"] }
 anyhow.workspace = true
 tiny-keccak = {workspace = true, features = ["keccak"] }
 thiserror.workspace = true
 
-alloy-rpc-types-eth.workspace = true
-alloy-consensus.workspace = true
-alloy-rlp.workspace = true
-alloy-primitives.workspace = true
+ruint =  { workspace = true, features = ["rlp"]}
+
 
 rlp.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+
