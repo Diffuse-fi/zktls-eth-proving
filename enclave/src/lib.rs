@@ -22,9 +22,10 @@ use crate::{
     trie::verify_proof,
     utils::{
         construct_report_data, extract_body, get_semantic_u256_bytes, keccak256,
-        storage_keys_for_message, RpcResponse,
+        RpcResponse,
     },
 };
+use crate::utils::calculate_array_storage_slots;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -48,11 +49,9 @@ struct ZkTlsProverCli {
     address: String,
     #[clap(
         long,
-        short = 'i',
-        env = "MESSAGE_INDEX",
-        help = "0-based index of the message"
+        short = 'n',
     )]
-    message_index: u64,
+    slots_to_prove: u32,
     #[clap(
         long,
         short = 'B',
@@ -65,7 +64,7 @@ struct ZkTlsProverCli {
 #[no_mangle]
 pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .try_init();
@@ -110,20 +109,20 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
     let contract_address = Address::from_str(&cli.address)
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
-    tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, message_index = cli.message_index, block_tag = %cli.block_number, "Proving parameters");
+    // tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, message_index = cli.message_index, block_tag = %cli.block_number, "Proving parameters");
 
-    let (slot_key_one, slot_key_two) = storage_keys_for_message(cli.message_index)?;
-    tracing::info!(slot1 = ?slot_key_one, slot2 = ?slot_key_two, "Calculated storage keys for message index {}", cli.message_index);
+    let target_slot_keys = calculate_array_storage_slots(
+        0,
+        cli.slots_to_prove,
+    )?;
 
     let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number)?;
     let block_number_val = block_header.number;
 
-    let slot_keys_for_rpc: Vec<B256> = vec![slot_key_one, slot_key_two];
-
     let proof_response = get_proof_from_rpc(
         &rpc_info,
         contract_address,
-        &slot_keys_for_rpc,
+        &target_slot_keys,
         block_number_val,
     )?;
     let verified_slot_values = verify_proof(proof_response, block_header.state_root.as_ref())
@@ -148,7 +147,7 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
 
     let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(2);
 
-    for (i, target_slot_key) in [slot_key_one, slot_key_two].iter().enumerate() {
+    for (i, target_slot_key) in target_slot_keys.iter().enumerate() {
         if let Some(semantic_bytes) = processed_semantic_values.get(target_slot_key) {
             attested_slots_data.push(SlotProofData {
                 slot_key: *target_slot_key,
@@ -163,9 +162,6 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
         }
     }
 
-    if attested_slots_data.len() != 2 {
-        anyhow::bail!("Expected to attest to 2 slots, but processed {}. This indicates a logic error or incomplete proof data for target slots.", attested_slots_data.len());
-    }
     tracing::info!(
         count = attested_slots_data.len(),
         "Slots prepared for attestation payload"

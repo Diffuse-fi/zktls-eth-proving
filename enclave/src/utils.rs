@@ -79,30 +79,38 @@ const BASE_SLOT_STR: &str =
     "0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b";
 const ELEMENT_SLOT_COUNT_FOR_MESSAGE: usize = 2;
 
-pub(crate) fn storage_keys_for_message(message_index: u64) -> Result<(B256, B256)> {
-    let base_slot_u256 =
-        RuintU256::from_str_radix(BASE_SLOT_STR.trim_start_matches("0x"), 16)
-            .map_err(|e| anyhow::anyhow!("Failed to parse ANOMALOUS_BASE_SLOT_STR: {:?}", e))?;
+pub(crate) fn calculate_array_storage_slots(
+    array_declaration_slot: u64,
+    count: u32,
+) -> Result<Vec<B256>> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count > 100 {
+        anyhow::bail!("Requested too many slots to prove (max 150): {}", count);
+    }
 
-    let element_slot_count_u256 = RuintU256::from(ELEMENT_SLOT_COUNT_FOR_MESSAGE);
-    let message_index_u256 = RuintU256::from(message_index);
+    let array_decl_slot_u256 = RuintU256::from(array_declaration_slot);
+    let array_decl_slot_hash_input: [u8; 32] = array_decl_slot_u256.to_be_bytes();
+    let array_data_base_hash_bytes = keccak256(&array_decl_slot_hash_input);
+    let array_data_base_u256 = RuintU256::from_be_bytes(array_data_base_hash_bytes);
 
-    let offset0 = message_index_u256 * element_slot_count_u256;
-    let slot_one_u256 = base_slot_u256 + offset0;
-    let slot_one_key: B256 = slot_one_u256.to_be_bytes().into();
-
-    let offset1 = offset0 + RuintU256::from(1);
-    let slot_two_u256 = base_slot_u256 + offset1;
-    let slot_two_key: B256 = slot_two_u256.to_be_bytes().into();
+    let mut slot_keys = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let current_item_index_u256 = RuintU256::from( i);
+        let item_slot_u256 = array_data_base_u256 + current_item_index_u256;
+        let item_slot_key: B256 = item_slot_u256.to_be_bytes().into();
+        slot_keys.push(item_slot_key);
+    }
 
     tracing::debug!(
-        message_index,
-        slot_one = ?slot_one_key,
-        slot_two = ?slot_two_key,
-        "Calculated anomalous storage keys"
+        array_declaration_slot,
+        count,
+        first_calculated_slot = ?slot_keys.first(),
+        last_calculated_slot = ?slot_keys.last(),
+        "Calculated array storage slots"
     );
-
-    Ok((slot_one_key, slot_two_key))
+    Ok(slot_keys)
 }
 
 pub(crate) fn get_semantic_u256_bytes(bytes_after_first_mpt_decode: &[u8]) -> Result<[u8; 32]> {
