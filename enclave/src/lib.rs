@@ -5,11 +5,12 @@ mod tls;
 mod trie;
 mod utils;
 
-use std::{collections::HashMap, str::FromStr};
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
+use std::{collections::HashMap, str::FromStr};
 use tls_enclave::tls_request;
 
+use crate::utils::{calculate_array_storage_slots, calculate_fixed_array_storage_slots};
 use crate::{
     attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
     eth::{
@@ -20,12 +21,8 @@ use crate::{
     },
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{
-        construct_report_data, extract_body, get_semantic_u256_bytes, keccak256,
-        RpcResponse,
-    },
+    utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
 };
-use crate::utils::calculate_array_storage_slots;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -47,10 +44,7 @@ struct ZkTlsProverCli {
         help = "Ethereum address of the target contract"
     )]
     address: String,
-    #[clap(
-        long,
-        short = 'n',
-    )]
+    #[clap(long, short = 'n')]
     slots_to_prove: u32,
     #[clap(
         long,
@@ -111,10 +105,7 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
 
     // tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, message_index = cli.message_index, block_tag = %cli.block_number, "Proving parameters");
 
-    let target_slot_keys = calculate_array_storage_slots(
-        0,
-        cli.slots_to_prove,
-    )?;
+    let target_slot_keys = calculate_fixed_array_storage_slots(0, cli.slots_to_prove)?;
 
     let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number)?;
     let block_number_val = block_header.number;

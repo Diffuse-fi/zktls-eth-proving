@@ -113,6 +113,35 @@ pub(crate) fn calculate_array_storage_slots(
     Ok(slot_keys)
 }
 
+pub(crate) fn calculate_fixed_array_storage_slots(
+    start_slot: u64,
+    count: u32,
+) -> Result<Vec<B256>> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    if count > 1000 {
+        anyhow::bail!("Requested too many slots to prove (max 1000): {}", count);
+    }
+
+    let mut slot_keys = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let slot_index = start_slot + i as u64;
+        let slot_u256 = RuintU256::from(slot_index);
+        let slot_key: B256 = slot_u256.to_be_bytes().into();
+        slot_keys.push(slot_key);
+    }
+
+    tracing::debug!(
+        start_slot,
+        count,
+        first_calculated_slot = ?slot_keys.first(),
+        last_calculated_slot = ?slot_keys.last(),
+        "Calculated fixed array storage slots"
+    );
+    Ok(slot_keys)
+}
+
 pub(crate) fn get_semantic_u256_bytes(bytes_after_first_mpt_decode: &[u8]) -> Result<[u8; 32]> {
     let final_bytes: Vec<u8>;
 
