@@ -1,16 +1,17 @@
 mod attestation_data;
 mod error;
 pub(crate) mod eth;
+mod prof;
 mod tls;
 mod trie;
 mod utils;
 
+use std::{collections::HashMap, str::FromStr};
+
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
-use std::{collections::HashMap, str::FromStr};
 use tls_enclave::tls_request;
 
-use crate::utils::{calculate_array_storage_slots, calculate_fixed_array_storage_slots};
 use crate::{
     attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
     eth::{
@@ -21,7 +22,10 @@ use crate::{
     },
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
+    utils::{
+        calculate_array_storage_slots, calculate_fixed_array_storage_slots, construct_report_data,
+        extract_body, get_semantic_u256_bytes, keccak256, RpcResponse,
+    },
 };
 
 #[derive(Parser, Debug)]
@@ -66,23 +70,24 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let cli = ZkTlsProverCli::parse();
     tracing::info!(config = ?cli, "Starting proving process with configuration");
 
-    match verify_attestation(cli) {
-        Ok(result) => {
-            tracing::info!("Proving process completed successfully.");
-            match serde_json::to_string_pretty(&result) {
-                Ok(json_output) => println!("{}", json_output),
-                Err(e) => {
-                    tracing::error!(error = %e, "Failed to serialize proving result to JSON");
-                    return SgxStatus::Unexpected;
+    prof::profile(99, "flamegraph.svg", || {
+        match verify_attestation(cli) {
+            Ok(result) => {
+                tracing::info!("Proving process completed successfully.");
+                match serde_json::to_string_pretty(&result) {
+                    Ok(json_output) => println!("{}", json_output),
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to serialize proving result to JSON");
+                    }
                 }
             }
-            SgxStatus::Success
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Proving process failed");
-            SgxStatus::Unexpected
-        }
-    }
+            Err(e) => {
+                tracing::error!(error = %e, "Proving process failed");
+            }
+        };
+    });
+
+    SgxStatus::Success
 }
 
 fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput> {
