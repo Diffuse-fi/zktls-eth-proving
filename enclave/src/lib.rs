@@ -6,6 +6,7 @@ mod trie;
 mod utils;
 
 use std::{collections::HashMap, str::FromStr};
+
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
 use tls_enclave::tls_request;
@@ -20,10 +21,7 @@ use crate::{
     },
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{
-        construct_report_data, extract_body, get_semantic_u256_bytes, keccak256,
-        storage_keys_for_message, RpcResponse,
-    },
+    utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
 };
 
 #[derive(Parser, Debug)]
@@ -46,13 +44,8 @@ struct ZkTlsProverCli {
         help = "Ethereum address of the target contract"
     )]
     address: String,
-    #[clap(
-        long,
-        short = 'i',
-        env = "MESSAGE_INDEX",
-        help = "0-based index of the message"
-    )]
-    message_index: u64,
+    #[clap(long, short = 's', help = "Storage slot keys in hex format (0x...)")]
+    storage_keys: Vec<String>,
     #[clap(
         long,
         short = 'B',
@@ -110,15 +103,40 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
     let contract_address = Address::from_str(&cli.address)
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
-    tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, message_index = cli.message_index, block_tag = %cli.block_number, "Proving parameters");
+    tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, storage_keys = ?cli.storage_keys, block_tag = %cli.block_number, "Proving parameters");
 
-    let (slot_key_one, slot_key_two) = storage_keys_for_message(cli.message_index)?;
-    tracing::info!(slot1 = ?slot_key_one, slot2 = ?slot_key_two, "Calculated storage keys for message index {}", cli.message_index);
+    let mut target_slot_keys: Vec<B256> = Vec::new();
+    for key_str in &cli.storage_keys {
+        let key_str = if key_str.starts_with("0x") {
+            &key_str[2..]
+        } else {
+            key_str
+        };
+        let key_bytes = hex::decode(key_str).map_err(|e| {
+            anyhow::anyhow!("Invalid hex format for storage key '{}': {}", key_str, e)
+        })?;
+        if key_bytes.len() != 32 {
+            anyhow::bail!(
+                "Storage key '{}' must be exactly 32 bytes (64 hex chars), got {} bytes",
+                key_str,
+                key_bytes.len()
+            );
+        }
+        let mut key_array = [0u8; 32];
+        key_array.copy_from_slice(&key_bytes);
+        target_slot_keys.push(B256::from(key_array));
+    }
+
+    if target_slot_keys.is_empty() {
+        anyhow::bail!("At least one storage key must be provided via -s flag");
+    }
+
+    tracing::info!(storage_keys = ?target_slot_keys, "Parsed {} storage keys", target_slot_keys.len());
 
     let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number)?;
     let block_number_val = block_header.number;
 
-    let slot_keys_for_rpc: Vec<B256> = vec![slot_key_one, slot_key_two];
+    let slot_keys_for_rpc = target_slot_keys.clone();
 
     let proof_response = get_proof_from_rpc(
         &rpc_info,
@@ -146,9 +164,9 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
         }
     }
 
-    let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(2);
+    let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(target_slot_keys.len());
 
-    for (i, target_slot_key) in [slot_key_one, slot_key_two].iter().enumerate() {
+    for (i, target_slot_key) in target_slot_keys.iter().enumerate() {
         if let Some(semantic_bytes) = processed_semantic_values.get(target_slot_key) {
             attested_slots_data.push(SlotProofData {
                 slot_key: *target_slot_key,
@@ -163,8 +181,8 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
         }
     }
 
-    if attested_slots_data.len() != 2 {
-        anyhow::bail!("Expected to attest to 2 slots, but processed {}. This indicates a logic error or incomplete proof data for target slots.", attested_slots_data.len());
+    if attested_slots_data.len() != target_slot_keys.len() {
+        anyhow::bail!("Expected to attest to {} slots, but processed {}. This indicates a logic error or incomplete proof data for target slots.", target_slot_keys.len(), attested_slots_data.len());
     }
     tracing::info!(
         count = attested_slots_data.len(),
