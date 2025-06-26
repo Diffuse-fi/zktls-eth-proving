@@ -34,7 +34,3 @@ ruint =  { workspace = true, features = ["rlp"]}
 rlp.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 
-
-
-pprof = { version = "0.11", default-features = false, features = ["flamegraph", "frame-pointer"] }
-# backtrace = "0.3"
