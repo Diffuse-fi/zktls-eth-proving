@@ -13,7 +13,8 @@ enclave = { path = "../enclave", config = "sgx/config.xml", edl = "sgx/enclave.e
 [dependencies]
 automata-sgx-sdk.workspace = true
 anyhow.workspace = true
-untrusted-host.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 automata-build-script.workspace = true

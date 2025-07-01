@@ -2,16 +2,14 @@ mod attestation_data;
 mod error;
 pub(crate) mod eth;
 mod timing;
-mod tls;
 mod trie;
 mod utils;
 
+use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
+
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
-use std::{collections::HashMap, str::FromStr};
-use tls_enclave::tls_request;
 
-use crate::utils::calculate_fixed_array_storage_slots;
 use crate::{
     attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
     eth::{
@@ -21,10 +19,63 @@ use crate::{
         proof::ProofResponse,
     },
     timing::{Lap, Timings},
-    tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
+    utils::{
+        calculate_fixed_array_storage_slots, construct_report_data, get_semantic_u256_bytes,
+        keccak256, RpcResponse,
+    },
 };
+
+extern "C" {
+    fn ocall_make_http_request(
+        url: *const c_char,
+        method: *const c_char,
+        body: *const u8,
+        body_len: usize,
+        response: *mut c_char,
+        max_response_len: usize,
+        actual_response_len: *mut usize,
+        http_status: *mut u16,
+    );
+}
+
+fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
+    const MAX_RESPONSE_LEN: usize = 10 * 1024 * 1024; // 10MB
+    let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
+    let mut actual_response_len: usize = 0;
+    let mut http_status: u16 = 0;
+
+    let url_cstring = CString::new(url)?;
+    let method_cstring = CString::new(method)?;
+
+    unsafe {
+        ocall_make_http_request(
+            url_cstring.as_ptr(),
+            method_cstring.as_ptr(),
+            body.as_ptr(),
+            body.len(),
+            response_buffer.as_mut_ptr() as *mut c_char,
+            MAX_RESPONSE_LEN,
+            &mut actual_response_len,
+            &mut http_status,
+        );
+    }
+
+    if http_status != 200 {
+        return Err(anyhow::anyhow!(
+            "HTTP request failed with status: {}",
+            http_status
+        ));
+    }
+
+    if actual_response_len == 0 {
+        return Err(anyhow::anyhow!("Empty response from HTTP request"));
+    }
+
+    response_buffer.truncate(actual_response_len.saturating_sub(1));
+    let response_str = String::from_utf8(response_buffer)?;
+    Ok(response_str)
+}
 
 #[derive(serde::Serialize)]
 struct TimingDebugOutput {
@@ -39,12 +90,13 @@ struct TimingDebugOutput {
     about = "ZK TLS Ethereum State Prover for specific contract message structure"
 )]
 struct ZkTlsProverCli {
-    #[clap(long, short, env = "RPC_DOMAIN")]
-    rpc_domain: String,
-    #[clap(long, short = 'P', env = "RPC_PATH")]
-    rpc_path: Option<String>,
-    #[clap(long, env = "ALCHEMY_API_KEY")]
-    alchemy_api_key: Option<String>,
+    #[clap(
+        long,
+        short = 'u',
+        env = "RPC_URL",
+        help = "Ethereum RPC endpoint URL (e.g., https://eth-mainnet.alchemyapi.io/v2/YOUR_API_KEY)"
+    )]
+    rpc_url: String,
     #[clap(
         long,
         short,
@@ -52,7 +104,7 @@ struct ZkTlsProverCli {
         help = "Ethereum address of the target contract"
     )]
     address: String,
-    #[clap(long, short = 'n')]
+    #[clap(long, short = 'n', help = "Number of storage slots to prove")]
     slots_to_prove: u32,
     #[clap(
         long,
@@ -76,14 +128,14 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
 
     let total_timer_start = std::time::Instant::now();
     let mut timings = Timings::default();
-    
+
     match verify_attestation_with_timing(cli, &mut timings, total_timer_start) {
         Ok(result) => {
             tracing::info!("Proving process completed successfully.");
-            
+
             // Always output timing data for debugging
             tracing::debug!("Timing breakdown: {:?}", result.timings);
-            
+
             match serde_json::to_string_pretty(&result) {
                 Ok(json_output) => println!("{}", json_output),
                 Err(e) => {
@@ -95,52 +147,45 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         }
         Err(e) => {
             tracing::error!(error = %e, "Proving process failed");
-            
+
             // Always output timing data, even on failure
             timings.total_ms = total_timer_start.elapsed().as_secs_f64() * 1000.0;
             let timing_output = TimingDebugOutput {
                 error: format!("{:?}", e),
                 timings,
             };
-            
+
             let json_output = serde_json::to_string_pretty(&timing_output);
-            println!("{}", json_output.unwrap_or_else(|e| format!("Failed to serialize timing output: {}", e)));
-            
+            println!(
+                "{}",
+                json_output.unwrap_or_else(|e| format!("Failed to serialize timing output: {}", e))
+            );
+
             SgxStatus::Unexpected
         }
     }
 }
 
-fn verify_attestation_with_timing(cli: ZkTlsProverCli, timings: &mut Timings, total_timer_start: std::time::Instant) -> anyhow::Result<ProvingResultOutput> {
-    if cli.rpc_path.is_none() && cli.alchemy_api_key.is_none() {
-        anyhow::bail!("RPC target missing: Provide either --rpc-path (-P) or --alchemy-api-key");
-    }
-
-    let rpc_path = cli
-        .rpc_path
-        .or_else(|| cli.alchemy_api_key.map(|key| format!("/v2/{}", key)))
-        .ok_or_else(|| anyhow::anyhow!("RPC target path could not be determined."))?;
-
-    let rpc_info = RpcInfo {
-        domain: cli.rpc_domain,
-        path: rpc_path,
-    };
-
+fn verify_attestation_with_timing(
+    cli: ZkTlsProverCli,
+    timings: &mut Timings,
+    total_timer_start: std::time::Instant,
+) -> anyhow::Result<ProvingResultOutput> {
     let contract_address = Address::from_str(&cli.address)
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
-    // tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, message_index = cli.message_index, block_tag = %cli.block_number, "Proving parameters");
+    tracing::info!(rpc_url = %cli.rpc_url, %contract_address, block_tag = %cli.block_number, slots_to_prove = cli.slots_to_prove, "Proving parameters");
 
     let target_slot_keys = calculate_fixed_array_storage_slots(0, cli.slots_to_prove)?;
 
     let lap1 = Lap::new("get_block_header");
-    let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number, timings)?;
+    let block_header = get_block_header_from_rpc(&cli.rpc_url, &cli.block_number, timings)?;
     lap1.stop(timings);
     let block_number_val = block_header.number;
 
     let lap2 = Lap::new("get_proof");
     let proof_response = get_proof_from_rpc(
-        &rpc_info,
+        &cli.rpc_url,
         contract_address,
         &target_slot_keys,
         block_number_val,
@@ -148,8 +193,9 @@ fn verify_attestation_with_timing(cli: ZkTlsProverCli, timings: &mut Timings, to
     )?;
     lap2.stop(timings);
     let lap3 = Lap::new("verify_mpt_proof");
-    let verified_slot_values = verify_proof(proof_response, block_header.state_root.as_ref(), timings)
-        .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
+    let verified_slot_values =
+        verify_proof(proof_response, block_header.state_root.as_ref(), timings)
+            .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
     lap3.stop(timings);
     tracing::info!("MPT proof verification successful");
 
@@ -222,23 +268,33 @@ fn verify_attestation_with_timing(cli: ZkTlsProverCli, timings: &mut Timings, to
     })
 }
 
-fn get_block_header_from_rpc(rpc_info: &RpcInfo, block_tag: &str, timings: &mut Timings) -> anyhow::Result<Header> {
+fn get_block_header_from_rpc(
+    rpc_url: &str,
+    block_tag: &str,
+    timings: &mut Timings,
+) -> anyhow::Result<Header> {
     tracing::info!(block_tag, "Fetching block header");
-    let zktls_request_provider = ZkTlsStateHeader::new(rpc_info.clone(), block_tag.to_string());
-    
-    let lap_tls = Lap::new("get_block_header::tls_request");
-    let response_str = tls_request(&rpc_info.domain, zktls_request_provider)
-        .map_err(|e| anyhow::anyhow!("TLS request for block header failed: {:?}", e))?;
+
+    let rpc_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [block_tag, false],
+        "id": 1
+    })
+    .to_string();
+
+    let lap_tls = Lap::new("get_block_header::http_request");
+    let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
+        .map_err(|e| anyhow::anyhow!("HTTP request for block header failed: {:?}", e))?;
     lap_tls.stop(timings);
 
-    let body = extract_body(&response_str)?;
     tracing::debug!(
-        response_body_len = body.len(),
+        response_body_len = response_str.len(),
         "Received block header response body"
     );
 
     let lap_parse = Lap::new("get_block_header::json_parsing");
-    let rpc_block_response: RpcResponse<Block> = serde_json::from_str(&body)
+    let rpc_block_response: RpcResponse<Block> = serde_json::from_str(&response_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse block header RPC response: {}", e))?;
     lap_parse.stop(timings);
 
@@ -258,7 +314,7 @@ fn get_block_header_from_rpc(rpc_info: &RpcInfo, block_tag: &str, timings: &mut 
 }
 
 fn get_proof_from_rpc(
-    rpc_info: &RpcInfo,
+    rpc_url: &str,
     contract_address: Address,
     slot_keys: &[B256],
     block_number: u64,
@@ -271,25 +327,30 @@ fn get_proof_from_rpc(
 
     tracing::info!(%contract_address, ?slot_keys_hex, block_number, "Fetching proof");
 
-    let zktls_request_provider = ZkTlsStateProof::new(
-        rpc_info.clone(),
-        format!("0x{}", hex::encode(contract_address.as_ref())),
-        slot_keys_hex,
-        format!("0x{:x}", block_number),
-    );
+    let rpc_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getProof",
+        "params": [
+            format!("0x{}", hex::encode(contract_address.as_ref())),
+            slot_keys_hex,
+            format!("0x{:x}", block_number)
+        ],
+        "id": 1
+    })
+    .to_string();
 
-    let lap_tls = Lap::new("get_proof::tls_request");
-    let response_str = tls_request(&rpc_info.domain, zktls_request_provider)
-        .map_err(|e| anyhow::anyhow!("TLS request for proof failed: {:?}", e))?;
+    let lap_tls = Lap::new("get_proof::http_request");
+    let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
+        .map_err(|e| anyhow::anyhow!("HTTP request for proof failed: {:?}", e))?;
     lap_tls.stop(timings);
-    let body = extract_body(&response_str)?;
+
     tracing::debug!(
-        response_body_len = body.len(),
+        response_body_len = response_str.len(),
         "Received proof response body"
     );
 
     let lap_parse = Lap::new("get_proof::json_parsing");
-    let rpc_proof_response: RpcResponse<ProofResponse> = serde_json::from_str(&body)
+    let rpc_proof_response: RpcResponse<ProofResponse> = serde_json::from_str(&response_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
     lap_parse.stop(timings);
 
