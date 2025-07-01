@@ -56,7 +56,7 @@ The ZK-TLS Ethereum State Prover performs the following workflow:
 
 1. **Clone the Repository**:
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/Diffuse-fi/zktls-eth-proving.git
     cd zktls-eth-proving
     ```
 
