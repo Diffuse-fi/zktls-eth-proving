@@ -2,11 +2,10 @@ use std::io::{BufRead, Read};
 
 use anyhow::Result;
 use automata_sgx_sdk::types::SgxStatus;
-use ruint::aliases::U256 as RuintU256;
 use serde::Deserialize;
 use tiny_keccak::{Hasher, Keccak};
 
-use crate::{attestation_data::AttestationPayload, eth::primitives::B256};
+use crate::attestation_data::AttestationPayload;
 
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut res = [0u8; 32];
@@ -73,36 +72,6 @@ pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8;
         report_data[32..64].copy_from_slice(&slot_commitment_hash);
     }
     Ok(report_data)
-}
-
-const BASE_SLOT_STR: &str =
-    "0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b";
-const ELEMENT_SLOT_COUNT_FOR_MESSAGE: usize = 2;
-
-pub(crate) fn storage_keys_for_message(message_index: u64) -> Result<(B256, B256)> {
-    let base_slot_u256 =
-        RuintU256::from_str_radix(BASE_SLOT_STR.trim_start_matches("0x"), 16)
-            .map_err(|e| anyhow::anyhow!("Failed to parse ANOMALOUS_BASE_SLOT_STR: {:?}", e))?;
-
-    let element_slot_count_u256 = RuintU256::from(ELEMENT_SLOT_COUNT_FOR_MESSAGE);
-    let message_index_u256 = RuintU256::from(message_index);
-
-    let offset0 = message_index_u256 * element_slot_count_u256;
-    let slot_one_u256 = base_slot_u256 + offset0;
-    let slot_one_key: B256 = slot_one_u256.to_be_bytes().into();
-
-    let offset1 = offset0 + RuintU256::from(1);
-    let slot_two_u256 = base_slot_u256 + offset1;
-    let slot_two_key: B256 = slot_two_u256.to_be_bytes().into();
-
-    tracing::debug!(
-        message_index,
-        slot_one = ?slot_one_key,
-        slot_two = ?slot_two_key,
-        "Calculated anomalous storage keys"
-    );
-
-    Ok((slot_one_key, slot_two_key))
 }
 
 pub(crate) fn get_semantic_u256_bytes(bytes_after_first_mpt_decode: &[u8]) -> Result<[u8; 32]> {
