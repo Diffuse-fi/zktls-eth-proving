@@ -1,6 +1,7 @@
 mod attestation_data;
 mod error;
 pub(crate) mod eth;
+mod timing;
 mod tls;
 mod trie;
 mod utils;
@@ -19,10 +20,17 @@ use crate::{
         primitives::{Address, B256},
         proof::ProofResponse,
     },
+    timing::{Lap, Timings},
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
     utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
 };
+
+#[derive(serde::Serialize)]
+struct TimingDebugOutput {
+    error: String,
+    timings: Timings,
+}
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -66,9 +74,16 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let cli = ZkTlsProverCli::parse();
     tracing::info!(config = ?cli, "Starting proving process with configuration");
 
-    match verify_attestation(cli) {
+    let total_timer_start = std::time::Instant::now();
+    let mut timings = Timings::default();
+    
+    match verify_attestation_with_timing(cli, &mut timings, total_timer_start) {
         Ok(result) => {
             tracing::info!("Proving process completed successfully.");
+            
+            // Always output timing data for debugging
+            tracing::debug!("Timing breakdown: {:?}", result.timings);
+            
             match serde_json::to_string_pretty(&result) {
                 Ok(json_output) => println!("{}", json_output),
                 Err(e) => {
@@ -80,12 +95,24 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         }
         Err(e) => {
             tracing::error!(error = %e, "Proving process failed");
+            
+            // Always output timing data, even on failure
+            timings.total_ms = total_timer_start.elapsed().as_secs_f64() * 1000.0;
+            let timing_output = TimingDebugOutput {
+                error: format!("{:?}", e),
+                timings,
+            };
+            
+            let json_output = serde_json::to_string_pretty(&timing_output);
+            println!("{}", json_output.unwrap_or_else(|e| format!("Failed to serialize timing output: {}", e)));
+            
             SgxStatus::Unexpected
         }
     }
 }
 
-fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput> {
+fn verify_attestation_with_timing(cli: ZkTlsProverCli, timings: &mut Timings, total_timer_start: std::time::Instant) -> anyhow::Result<ProvingResultOutput> {
+
     if cli.rpc_path.is_none() && cli.alchemy_api_key.is_none() {
         anyhow::bail!("RPC target missing: Provide either --rpc-path (-P) or --alchemy-api-key");
     }
@@ -104,6 +131,11 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
     tracing::info!(rpc_domain = %rpc_info.domain, rpc_path = %rpc_info.path, %contract_address, storage_keys = ?cli.storage_keys, block_tag = %cli.block_number, "Proving parameters");
+
+    let lap1 = Lap::new("get_block_header");
+    let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number, timings)?;
+    lap1.stop(timings);
+    let block_number_val = block_header.number;
 
     let mut target_slot_keys: Vec<B256> = Vec::new();
     for key_str in &cli.storage_keys {
@@ -133,21 +165,25 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
 
     tracing::info!(storage_keys = ?target_slot_keys, "Parsed {} storage keys", target_slot_keys.len());
 
-    let block_header = get_block_header_from_rpc(&rpc_info, &cli.block_number)?;
-    let block_number_val = block_header.number;
-
     let slot_keys_for_rpc = target_slot_keys.clone();
 
+    let lap2 = Lap::new("get_proof");
     let proof_response = get_proof_from_rpc(
         &rpc_info,
         contract_address,
         &slot_keys_for_rpc,
         block_number_val,
+        timings,
     )?;
-    let verified_slot_values = verify_proof(proof_response, block_header.state_root.as_ref())
+    lap2.stop(timings);
+
+    let lap3 = Lap::new("verify_mpt_proof");
+    let verified_slot_values = verify_proof(proof_response, block_header.state_root.as_ref(), timings)
         .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
+    lap3.stop(timings);
     tracing::info!("MPT proof verification successful");
 
+    let lap_processing = Lap::new("slot_processing");
     let mut processed_semantic_values: HashMap<B256, [u8; 32]> = HashMap::new();
     for (proved_key, opt_mpt_value) in verified_slot_values {
         if let Some(mpt_value_bytes) = opt_mpt_value {
@@ -163,6 +199,7 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
             tracing::warn!(slot_key = ?proved_key, "Slot proven but MPT proof yielded no value (None).");
         }
     }
+    lap_processing.stop(timings);
 
     let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(target_slot_keys.len());
 
@@ -195,27 +232,37 @@ fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput
         proven_slots: attested_slots_data,
     };
 
+    let lap_report = Lap::new("construct_report_data");
     let report_data = construct_report_data(&attestation_payload)?;
+    lap_report.stop(timings);
     tracing::debug!(report_data_hex = %hex::encode(report_data), "Constructed report_data for DCAP quote");
 
+    let lap4 = Lap::new("dcap_quote_generation");
     let quote_bytes = automata_sgx_sdk::dcap::dcap_quote(report_data)
         .map_err(|e| anyhow::anyhow!("DCAP quote generation failed: {:?}", e))?;
+    lap4.stop(timings);
     tracing::info!(
         quote_len = quote_bytes.len(),
         "DCAP quote generated successfully"
     );
 
+    timings.total_ms = total_timer_start.elapsed().as_secs_f64() * 1000.0;
+
     Ok(ProvingResultOutput {
         attestation_payload,
         sgx_quote_hex: hex::encode(quote_bytes),
+        timings: timings.clone(),
     })
 }
 
-fn get_block_header_from_rpc(rpc_info: &RpcInfo, block_tag: &str) -> anyhow::Result<Header> {
+fn get_block_header_from_rpc(rpc_info: &RpcInfo, block_tag: &str, timings: &mut Timings) -> anyhow::Result<Header> {
     tracing::info!(block_tag, "Fetching block header");
     let zktls_request_provider = ZkTlsStateHeader::new(rpc_info.clone(), block_tag.to_string());
+    
+    let lap_tls = Lap::new("get_block_header::tls_request");
     let response_str = tls_request(&rpc_info.domain, zktls_request_provider)
         .map_err(|e| anyhow::anyhow!("TLS request for block header failed: {:?}", e))?;
+    lap_tls.stop(timings);
 
     let body = extract_body(&response_str)?;
     tracing::debug!(
@@ -223,8 +270,10 @@ fn get_block_header_from_rpc(rpc_info: &RpcInfo, block_tag: &str) -> anyhow::Res
         "Received block header response body"
     );
 
+    let lap_parse = Lap::new("get_block_header::json_parsing");
     let rpc_block_response: RpcResponse<Block> = serde_json::from_str(&body)
         .map_err(|e| anyhow::anyhow!("Failed to parse block header RPC response: {}", e))?;
+    lap_parse.stop(timings);
 
     let header = rpc_block_response.result.header;
     let rpc_block_hash = header.block_hash_untrusted;
@@ -246,6 +295,7 @@ fn get_proof_from_rpc(
     contract_address: Address,
     slot_keys: &[B256],
     block_number: u64,
+    timings: &mut Timings,
 ) -> anyhow::Result<ProofResponse> {
     let slot_keys_hex: Vec<String> = slot_keys
         .iter()
@@ -261,16 +311,21 @@ fn get_proof_from_rpc(
         format!("0x{:x}", block_number),
     );
 
+    let lap_tls = Lap::new("get_proof::tls_request");
     let response_str = tls_request(&rpc_info.domain, zktls_request_provider)
         .map_err(|e| anyhow::anyhow!("TLS request for proof failed: {:?}", e))?;
+    lap_tls.stop(timings);
+    
     let body = extract_body(&response_str)?;
     tracing::debug!(
         response_body_len = body.len(),
         "Received proof response body"
     );
 
+    let lap_parse = Lap::new("get_proof::json_parsing");
     let rpc_proof_response: RpcResponse<ProofResponse> = serde_json::from_str(&body)
         .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
+    lap_parse.stop(timings);
 
     tracing::info!("Proof received successfully");
     Ok(rpc_proof_response.result)

@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::eth::primitives::B256;
+use crate::timing::Timings;
 
 /// Information about a single proven slot.
 #[derive(Serialize, Debug, Clone)]
@@ -24,4 +25,5 @@ pub struct AttestationPayload {
 pub struct ProvingResultOutput {
     pub attestation_payload: AttestationPayload,
     pub sgx_quote_hex: String,
+    pub timings: Timings,
 }
