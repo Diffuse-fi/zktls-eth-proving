@@ -5,13 +5,12 @@ mod tls;
 mod trie;
 mod utils;
 
-use std::{collections::HashMap, str::FromStr, time::Instant};
-
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
+use std::{collections::HashMap, str::FromStr};
 use tls_enclave::tls_request;
-use tokio::runtime::Builder;
 
+use crate::utils::{calculate_array_storage_slots, calculate_fixed_array_storage_slots};
 use crate::{
     attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
     eth::{
@@ -22,10 +21,7 @@ use crate::{
     },
     tls::{RpcInfo, ZkTlsStateHeader, ZkTlsStateProof},
     trie::verify_proof,
-    utils::{
-        calculate_fixed_array_storage_slots, construct_report_data, extract_body,
-        get_semantic_u256_bytes, keccak256, RpcResponse,
-    },
+    utils::{construct_report_data, extract_body, get_semantic_u256_bytes, keccak256, RpcResponse},
 };
 
 #[derive(Parser, Debug)]
@@ -59,14 +55,6 @@ struct ZkTlsProverCli {
     block_number: String,
 }
 
-fn burn_keccak(iters: usize) -> [u8; 32] {
-    let mut data = [0u8; 32];
-    for _ in 0..iters {
-        data = crate::utils::keccak256(&data);
-    }
-    data
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -75,61 +63,26 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         .with_env_filter(env_filter)
         .try_init();
 
-    let rt = Builder::new_multi_thread()
-        .worker_threads(32)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
+    let cli = ZkTlsProverCli::parse();
+    tracing::info!(config = ?cli, "Starting proving process with configuration");
 
-    let rounds_per_task = 750_000;
-    let tasks = 6;
-
-    let t0 = Instant::now();
-    for _ in 0..tasks {
-        burn_keccak(rounds_per_task);
+    match verify_attestation(cli) {
+        Ok(result) => {
+            tracing::info!("Proving process completed successfully.");
+            match serde_json::to_string_pretty(&result) {
+                Ok(json_output) => println!("{}", json_output),
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to serialize proving result to JSON");
+                    return SgxStatus::Unexpected;
+                }
+            }
+            SgxStatus::Success
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Proving process failed");
+            SgxStatus::Unexpected
+        }
     }
-    let blocking = t0.elapsed();
-
-    let t1 = Instant::now();
-    rt.block_on(async {
-        let mut handles = Vec::new();
-        for _ in 0..tasks {
-            handles.push(tokio::spawn(async move { burn_keccak(rounds_per_task) }));
-        }
-        for h in handles {
-            h.await.unwrap();
-        }
-    });
-    let parallel = t1.elapsed();
-
-    tracing::info!(
-        ?blocking,
-        ?parallel,
-        speedup = ?(blocking.as_secs_f64() / parallel.as_secs_f64()),
-        "Tokio micro-benchmark"
-    );
-
-    // let cli = ZkTlsProverCli::parse();
-    // tracing::info!(config = ?cli, "Starting proving process with configuration");
-
-    // match verify_attestation(cli) {
-    //     Ok(result) => {
-    //         tracing::info!("Proving process completed successfully.");
-    //         match serde_json::to_string_pretty(&result) {
-    //             Ok(json_output) => println!("{}", json_output),
-    //             Err(e) => {
-    //                 tracing::error!(error = %e, "Failed to serialize proving result to JSON");
-    //                 return SgxStatus::Unexpected;
-    //             }
-    //         }
-    //         SgxStatus::Success
-    //     }
-    //     Err(e) => {
-    //         tracing::error!(error = %e, "Proving process failed");
-    //         SgxStatus::Unexpected
-    //     }
-    // }
-    SgxStatus::Success
 }
 
 fn verify_attestation(cli: ZkTlsProverCli) -> anyhow::Result<ProvingResultOutput> {
