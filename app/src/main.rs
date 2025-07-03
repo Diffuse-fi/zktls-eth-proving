@@ -60,12 +60,12 @@ pub extern "C" fn ocall_make_http_request(
             }
             match resp.text() {
                 Ok(text) => {
-                    let c_string = CString::new(text).unwrap();
-                    let bytes = c_string.as_bytes_with_nul();
-                    if bytes.len() > max_response_len {
+                    let bytes = text.as_bytes();
+                    if bytes.len() >= max_response_len {
                         eprintln!("HTTP response body is too large for the buffer.");
                         unsafe {
                             *http_status = 500;
+                            *actual_response_len = 0;
                         }
                         return;
                     }
@@ -75,6 +75,7 @@ pub extern "C" fn ocall_make_http_request(
                             response as *mut u8,
                             bytes.len(),
                         );
+                        *(response as *mut u8).add(bytes.len()) = 0;
                         *actual_response_len = bytes.len();
                     }
                 }

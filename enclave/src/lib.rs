@@ -69,11 +69,12 @@ fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<Str
     }
 
     if actual_response_len == 0 {
-        return Err(anyhow::anyhow!("Empty response from HTTP request"));
+        tracing::warn!("Empty response from HTTP request, but status was 200");
+        return Ok(String::new());
     }
-
-    response_buffer.truncate(actual_response_len.saturating_sub(1));
-    let response_str = String::from_utf8(response_buffer)?;
+    
+    let response_slice = &response_buffer[..actual_response_len];
+    let response_str = String::from_utf8(response_slice.to_vec())?;
     Ok(response_str)
 }
 
