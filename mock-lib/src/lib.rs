@@ -13,10 +13,6 @@ pub extern "C" fn ocall_make_http_request(
     actual_response_len: *mut usize,
     http_status: *mut u16,
 ) {
-    std::panic::set_hook(Box::new(|info| {
-        println!("[OCALL-LIB PANIC] Panic occurred: {:?}", info);
-    }));
-
     println!("[OCALL-LIB] Entered ocall_make_http_request.");
 
     let url_str = unsafe { CStr::from_ptr(url).to_str().unwrap() };
@@ -46,7 +42,7 @@ pub extern "C" fn ocall_make_http_request(
         Ok(resp) => {
             println!("[OCALL-LIB] Response received, status: {}", resp.status());
             unsafe {
-                *http_status = resp.status().as_u16();
+                std::ptr::write_unaligned(http_status, resp.status().as_u16());
             }
             match resp.text() {
                 Ok(text) => {
@@ -54,8 +50,8 @@ pub extern "C" fn ocall_make_http_request(
                     if bytes.len() >= max_response_len {
                         eprintln!("[OCALL-LIB] Response body too large.");
                         unsafe {
-                            *http_status = 500;
-                            *actual_response_len = 0;
+                            std::ptr::write_unaligned(http_status, 500u16);
+                            std::ptr::write_unaligned(actual_response_len, 0u16);
                         }
                         return;
                     }
@@ -66,13 +62,13 @@ pub extern "C" fn ocall_make_http_request(
                             bytes.len(),
                         );
                         *(response as *mut u8).add(bytes.len()) = 0;
-                        *actual_response_len = bytes.len();
+                        std::ptr::write_unaligned(actual_response_len, bytes.len());
                     }
                 }
                 Err(e) => {
                     eprintln!("[OCALL-LIB] Failed to read response text: {}", e);
                     unsafe {
-                        *http_status = 500;
+                        std::ptr::write_unaligned(http_status, 500u16);
                     }
                 }
             }

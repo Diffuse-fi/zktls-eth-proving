@@ -40,7 +40,7 @@ extern "C" {
 }
 
 fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
-    const MAX_RESPONSE_LEN: usize = 10 * 1024 * 1024; // 10MB
+    const MAX_RESPONSE_LEN: usize = 256 * 1024;
     let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
     let mut actual_response_len: usize = 0;
     let mut http_status: u16 = 0;
@@ -72,7 +72,7 @@ fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<Str
         tracing::warn!("Empty response from HTTP request, but status was 200");
         return Ok(String::new());
     }
-    
+
     let response_slice = &response_buffer[..actual_response_len];
     let response_str = String::from_utf8(response_slice.to_vec())?;
     Ok(response_str)
