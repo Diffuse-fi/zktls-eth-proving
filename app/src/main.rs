@@ -1,14 +1,6 @@
-extern crate untrusted_app_ocalls;
-
-use std::{
-    ffi::{CStr, CString},
-    fs,
-    os::raw::c_char,
-    slice,
-};
+extern crate mock_lib;
 
 use automata_sgx_sdk::types::SgxStatus;
-use reqwest::blocking::Client;
 
 automata_sgx_sdk::enclave! {
     name: Enclave,
