@@ -9,7 +9,7 @@
   <!-- The maximum stack sizeper thread.  Must be 4KB aligned -->
   <StackMaxSize>0x40000</StackMaxSize>
   <!-- The maximum heap size for the process. Must be 4KB aligned. -->
-  <HeapMaxSize>0x100000</HeapMaxSize>
+  <HeapMaxSize>0x200000</HeapMaxSize>
   <!-- The number of TCS. Must be greater than 0 -->
   <!-- TCS: Thread Control Structure -->
   <TCSNum>1</TCSNum>
