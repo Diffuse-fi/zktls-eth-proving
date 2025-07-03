@@ -15,6 +15,7 @@ automata-sgx-sdk.workspace = true
 anyhow.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+untrusted-app-ocalls = { workspace = true }
 
 [build-dependencies]
 automata-build-script.workspace = true

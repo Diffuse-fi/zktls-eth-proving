@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["app", "enclave"]
+members = ["app", "enclave", "ocalls"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ homepage = "https://www.ata.network/"
 [workspace.dependencies]
 automata-sgx-sdk = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
 automata-build-script = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
+
+ untrusted-app-ocalls = { path = "ocalls" }
 
 hex = "0.4"
 clap = "3.2"
