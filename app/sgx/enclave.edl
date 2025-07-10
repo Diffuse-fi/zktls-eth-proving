@@ -25,13 +25,6 @@ enclave {
             [out] size_t* actual_response_len,
             [out] uint16_t* http_status
         );
-
-        void ocall_write_to_file(
-            [in, size=response_json_len] char* response_json_bytes,
-            size_t response_json_len,
-            [in, size=filename_len] char* filename_bytes,
-            size_t filename_len
-        );
     };
 
 };
