@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
         .simple_proving()
         .map_err(|e| anyhow::anyhow!("{:?}", e))?;
     if !result.is_success() {
-        println!("{:?}", result);
+        return Err(anyhow::anyhow!("{:?}", result));
     }
     Ok(())
 }

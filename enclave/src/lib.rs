@@ -21,8 +21,8 @@ use crate::{
     timing::{Lap, Timings},
     trie::verify_proof,
     utils::{
-        calculate_fixed_array_storage_slots, construct_report_data, get_semantic_u256_bytes,
-        keccak256, RpcResponse,
+        construct_report_data, get_semantic_u256_bytes, keccak256, parse_slots_to_prove,
+        RpcResponse,
     },
 };
 
@@ -40,7 +40,7 @@ extern "C" {
 }
 
 fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
-    const MAX_RESPONSE_LEN: usize = 10 * 1024 * 1024; // 10MB
+    const MAX_RESPONSE_LEN: usize = 256 * 1024 * 4 * 4;
     let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
     let mut actual_response_len: usize = 0;
     let mut http_status: u16 = 0;
@@ -72,7 +72,7 @@ fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<Str
         tracing::warn!("Empty response from HTTP request, but status was 200");
         return Ok(String::new());
     }
-    
+
     let response_slice = &response_buffer[..actual_response_len];
     let response_str = String::from_utf8(response_slice.to_vec())?;
     Ok(response_str)
@@ -105,8 +105,12 @@ struct ZkTlsProverCli {
         help = "Ethereum address of the target contract"
     )]
     address: String,
-    #[clap(long, short = 'n', help = "Number of storage slots to prove")]
-    slots_to_prove: u32,
+    #[clap(
+        long,
+        short = 's',
+        help = "List of storage slots to prove (comma-separated, e.g., '0,1,2,3')"
+    )]
+    slots_to_prove: String,
     #[clap(
         long,
         short = 'B',
@@ -175,9 +179,9 @@ fn verify_attestation_with_timing(
     let contract_address = Address::from_str(&cli.address)
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
-    tracing::info!(rpc_url = %cli.rpc_url, %contract_address, block_tag = %cli.block_number, slots_to_prove = cli.slots_to_prove, "Proving parameters");
+    tracing::info!(rpc_url = %cli.rpc_url, %contract_address, block_tag = %cli.block_number, slots_to_prove = %cli.slots_to_prove, "Proving parameters");
 
-    let target_slot_keys = calculate_fixed_array_storage_slots(0, cli.slots_to_prove)?;
+    let target_slot_keys = parse_slots_to_prove(&cli.slots_to_prove)?;
 
     let lap1 = Lap::new("get_block_header");
     let block_header = get_block_header_from_rpc(&cli.rpc_url, &cli.block_number, timings)?;
@@ -213,7 +217,10 @@ fn verify_attestation_with_timing(
                 }
             }
         } else {
-            tracing::warn!(slot_key = ?proved_key, "Slot proven but MPT proof yielded no value (None).");
+            // Non-existent storage slots have a default value of zero
+            tracing::info!(slot_key = ?proved_key, "Slot proven but does not exist (None). Using default value of zero.");
+            let zero_value = [0u8; 32];
+            processed_semantic_values.insert(proved_key, zero_value);
         }
     }
     lap_processing.stop(timings);
@@ -326,7 +333,7 @@ fn get_proof_from_rpc(
         .map(|key| format!("0x{}", hex::encode(key.as_ref())))
         .collect();
 
-    tracing::info!(%contract_address, ?slot_keys_hex, block_number, "Fetching proof");
+    tracing::info!(%contract_address, block_number, "Fetching proof");
 
     let rpc_payload = serde_json::json!({
         "jsonrpc": "2.0",

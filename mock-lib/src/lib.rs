@@ -13,20 +13,13 @@ pub extern "C" fn ocall_make_http_request(
     actual_response_len: *mut usize,
     http_status: *mut u16,
 ) {
-    std::panic::set_hook(Box::new(|info| {
-        println!("[OCALL-LIB PANIC] Panic occurred: {:?}", info);
-    }));
-
-    println!("[OCALL-LIB] Entered ocall_make_http_request.");
 
     let url_str = unsafe { CStr::from_ptr(url).to_str().unwrap() };
     let method_str = unsafe { CStr::from_ptr(method).to_str().unwrap() };
     let body_slice = unsafe { slice::from_raw_parts(body, body_len) };
 
-    println!("[OCALL-LIB] Request URL: {}", url_str);
 
     let client = Client::new();
-    println!("[OCALL-LIB] Reqwest client created. About to send request...");
 
     let res = match method_str.to_uppercase().as_str() {
         "POST" => client.post(url_str).body(body_slice.to_vec()).send(),
@@ -40,13 +33,11 @@ pub extern "C" fn ocall_make_http_request(
         }
     };
 
-    println!("[OCALL-LIB] Request sent. Processing response...");
 
     match res {
         Ok(resp) => {
-            println!("[OCALL-LIB] Response received, status: {}", resp.status());
             unsafe {
-                *http_status = resp.status().as_u16();
+                std::ptr::write_unaligned(http_status, resp.status().as_u16());
             }
             match resp.text() {
                 Ok(text) => {
@@ -54,8 +45,8 @@ pub extern "C" fn ocall_make_http_request(
                     if bytes.len() >= max_response_len {
                         eprintln!("[OCALL-LIB] Response body too large.");
                         unsafe {
-                            *http_status = 500;
-                            *actual_response_len = 0;
+                            std::ptr::write_unaligned(http_status, 500u16);
+                            std::ptr::write_unaligned(actual_response_len, 0usize);
                         }
                         return;
                     }
@@ -66,13 +57,13 @@ pub extern "C" fn ocall_make_http_request(
                             bytes.len(),
                         );
                         *(response as *mut u8).add(bytes.len()) = 0;
-                        *actual_response_len = bytes.len();
+                        std::ptr::write_unaligned(actual_response_len, bytes.len());
                     }
                 }
                 Err(e) => {
                     eprintln!("[OCALL-LIB] Failed to read response text: {}", e);
                     unsafe {
-                        *http_status = 500;
+                        std::ptr::write_unaligned(http_status, 500u16);
                     }
                 }
             }
@@ -84,7 +75,6 @@ pub extern "C" fn ocall_make_http_request(
             }
         }
     }
-    println!("[OCALL-LIB] Finished ocall_make_http_request.");
 }
 
 #[no_mangle]

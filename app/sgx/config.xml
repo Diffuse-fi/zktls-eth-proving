@@ -7,9 +7,9 @@
   <!-- SVN: Security version number. Used to version security levels of both hardware and software components of the Intel® Software Guard Extensions framework -->
   <ISVSVN>0</ISVSVN>
   <!-- The maximum stack sizeper thread.  Must be 4KB aligned -->
-  <StackMaxSize>0x40000</StackMaxSize>
+  <StackMaxSize>0x80000</StackMaxSize>
   <!-- The maximum heap size for the process. Must be 4KB aligned. -->
-  <HeapMaxSize>0x100000</HeapMaxSize>
+  <HeapMaxSize>0x4000000</HeapMaxSize>
   <!-- The number of TCS. Must be greater than 0 -->
   <!-- TCS: Thread Control Structure -->
   <TCSNum>1</TCSNum>

@@ -157,13 +157,36 @@ fn verify_storage_proof(
                     }
                 };
             } else {
-                assert_eq!(decoded.item_count()?, 2);
-                let value_decoded = decoded.at(1)?;
-                assert!(value_decoded.is_data());
-                let raw = value_decoded.as_raw();
-                let value: Vec<u8> = rlp::decode(raw)?;
-
-                values.push((proof.key, Some(value)));
+                // Handle the last node in the proof
+                let item_count = decoded.item_count()?;
+                match item_count {
+                    2 => {
+                        let value_decoded = decoded.at(1)?;
+                        if value_decoded.is_data() {
+                            let raw = value_decoded.as_raw();
+                            let value: Vec<u8> = rlp::decode(raw)?;
+                            values.push((proof.key, Some(value)));
+                        } else {
+                            // empty value case
+                            values.push((proof.key, None));
+                        }
+                    }
+                    17 => {
+                        // branch node => key doesn't exist
+                        tracing::debug!(
+                            "Storage slot {:?} does not exist (proof ends at branch node)",
+                            proof.key
+                        );
+                        values.push((proof.key, None));
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "Unexpected node type in storage proof: {} items",
+                            item_count
+                        );
+                        values.push((proof.key, None));
+                    }
+                }
             }
         }
         if !values.iter().any(|(k, _)| *k == proof.key) {

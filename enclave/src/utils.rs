@@ -1,7 +1,5 @@
-use std::io::{BufRead, Read};
 
 use anyhow::Result;
-use automata_sgx_sdk::types::SgxStatus;
 use ruint::aliases::U256 as RuintU256;
 use serde::Deserialize;
 use tiny_keccak::{Hasher, Keccak};
@@ -16,41 +14,7 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     res
 }
 
-pub(crate) fn extract_body(response: &str) -> Result<String> {
-    let mut parts = response.splitn(2, "\r\n\r\n");
-    let headers = parts.next().ok_or(SgxStatus::Unexpected)?;
-    let body = parts.next().ok_or(SgxStatus::Unexpected)?;
 
-    if headers.contains("Transfer-Encoding: chunked") {
-        decode_chunked_body(body)
-    } else {
-        Ok(body.to_string())
-    }
-}
-
-fn decode_chunked_body(body: &str) -> Result<String> {
-    let mut reader = std::io::BufReader::new(body.as_bytes());
-    let mut decoded = Vec::new();
-    loop {
-        let mut chunk_size_hex = String::new();
-        reader.read_line(&mut chunk_size_hex)?;
-        let chunk_size_hex = chunk_size_hex.trim();
-        if chunk_size_hex.is_empty() {
-            continue;
-        }
-        let chunk_size = usize::from_str_radix(chunk_size_hex, 16)?;
-        if chunk_size == 0 {
-            break;
-        }
-        let mut chunk_data = vec![0u8; chunk_size];
-        reader.read_exact(&mut chunk_data)?;
-        decoded.extend_from_slice(&chunk_data);
-        let mut crlf = [0u8; 2];
-        reader.read_exact(&mut crlf)?;
-    }
-    String::from_utf8(decoded)
-        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 sequence in chunked body: {}", e))
-}
 
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
@@ -75,69 +39,34 @@ pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8;
     Ok(report_data)
 }
 
-const BASE_SLOT_STR: &str =
-    "0xc2575a0e9e593c00f959f8c92f12db2869c3395a3b0502d05e2516446f71f85b";
-const ELEMENT_SLOT_COUNT_FOR_MESSAGE: usize = 2;
 
-pub(crate) fn calculate_array_storage_slots(
-    array_declaration_slot: u64,
-    count: u32,
-) -> Result<Vec<B256>> {
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    if count > 100 {
-        anyhow::bail!("Requested too many slots to prove (max 150): {}", count);
-    }
 
-    let array_decl_slot_u256 = RuintU256::from(array_declaration_slot);
-    let array_decl_slot_hash_input: [u8; 32] = array_decl_slot_u256.to_be_bytes();
-    let array_data_base_hash_bytes = keccak256(&array_decl_slot_hash_input);
-    let array_data_base_u256 = RuintU256::from_be_bytes(array_data_base_hash_bytes);
 
-    let mut slot_keys = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let current_item_index_u256 = RuintU256::from( i);
-        let item_slot_u256 = array_data_base_u256 + current_item_index_u256;
-        let item_slot_key: B256 = item_slot_u256.to_be_bytes().into();
-        slot_keys.push(item_slot_key);
+pub(crate) fn parse_slots_to_prove(slots_str: &str) -> Result<Vec<B256>> {
+    let slot_numbers: Result<Vec<u64>, _> = slots_str
+        .split(',')
+        .map(|s| s.trim().parse::<u64>())
+        .collect();
+    
+    let slot_numbers = slot_numbers
+        .map_err(|e| anyhow::anyhow!("Invalid slot number format: {}", e))?;
+    
+    if slot_numbers.len() > 1000 {
+        anyhow::bail!("Requested too many slots to prove (max 1000): {}", slot_numbers.len());
     }
 
-    tracing::debug!(
-        array_declaration_slot,
-        count,
-        first_calculated_slot = ?slot_keys.first(),
-        last_calculated_slot = ?slot_keys.last(),
-        "Calculated array storage slots"
-    );
-    Ok(slot_keys)
-}
-
-pub(crate) fn calculate_fixed_array_storage_slots(
-    start_slot: u64,
-    count: u32,
-) -> Result<Vec<B256>> {
-    if count == 0 {
-        return Ok(Vec::new());
-    }
-    if count > 1000 {
-        anyhow::bail!("Requested too many slots to prove (max 1000): {}", count);
-    }
-
-    let mut slot_keys = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let slot_index = start_slot + i as u64;
-        let slot_u256 = RuintU256::from(slot_index);
+    let mut slot_keys = Vec::with_capacity(slot_numbers.len());
+    for slot_number in slot_numbers {
+        let slot_u256 = RuintU256::from(slot_number);
         let slot_key: B256 = slot_u256.to_be_bytes().into();
         slot_keys.push(slot_key);
     }
 
     tracing::debug!(
-        start_slot,
-        count,
-        first_calculated_slot = ?slot_keys.first(),
-        last_calculated_slot = ?slot_keys.last(),
-        "Calculated fixed array storage slots"
+        slots_count = slot_keys.len(),
+        first_slot = ?slot_keys.first(),
+        last_slot = ?slot_keys.last(),
+        "Parsed storage slots to prove"
     );
     Ok(slot_keys)
 }
