@@ -37,6 +37,33 @@ struct ProvingTask {
 }
 
 #[derive(Parser, Debug)]
+struct CliParams {
+    rpc_url: String,
+    address: String,
+    block_number: String,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum PoolType {
+    Uniswap3,
+    Pendle,
+}
+
+impl FromStr for PoolType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "uniswap3" => Ok(PoolType::Uniswap3),
+            "pendle" => Ok(PoolType::Pendle),
+            _ => Err(format!(
+                "unknown pool type `{}`; valid: uniswap3, pendle",
+                s
+            )),
+        }
+    }
+}
+
+#[derive(Parser, Debug, Clone)]
 #[clap(
     author = "Diffuse",
     version = "v0.2",
@@ -64,6 +91,13 @@ struct ZkTlsProverCli {
     proving_tasks: String,
     #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
     pt_tokens_amount: U256,
+    #[clap(
+        long,
+        short = 'p',
+        default_value = "pendle",
+        help = "Choose either pool type to calculate price impact(uniswap3, pendle)"
+    )]
+    pool_type: PoolType,
 }
 
 #[no_mangle]
@@ -75,7 +109,6 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         .try_init();
 
     let cli = ZkTlsProverCli::parse();
-    tracing::info!(config = ?cli, "Starting proving process with configuration");
 
     let total_timer_start = std::time::Instant::now();
     let mut timings = Timings::default();

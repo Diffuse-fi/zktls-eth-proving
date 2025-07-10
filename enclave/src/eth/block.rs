@@ -1,6 +1,5 @@
-use serde::Deserialize;
-
 use crate::eth::{de, header::Header, primitives::*};
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -113,6 +113,7 @@ extern "C" {
         http_status: *mut u16,
     );
 }
+
 fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
     const MAX_RESPONSE_LEN: usize = 256 * 1024 * 4 * 4;
     let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
@@ -265,7 +266,6 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
         timings,
     )?;
     lap2.stop(timings);
-
     let lap3 = Lap::new("verify_mpt_proof");
     let verified_slot_values =
         verify_proof(proof_response, block_header.state_root.as_ref(), timings)
