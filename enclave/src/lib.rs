@@ -206,39 +206,58 @@ fn verify_attestation_with_timing(
 
     let lap_processing = Lap::new("slot_processing");
     let mut processed_semantic_values: HashMap<B256, [u8; 32]> = HashMap::new();
+    let mut non_existent_slots: Vec<B256> = Vec::new();
+
     for (proved_key, opt_mpt_value) in verified_slot_values {
         if let Some(mpt_value_bytes) = opt_mpt_value {
+            tracing::debug!(slot_key = ?proved_key, value_bytes_len = mpt_value_bytes.len(), value_hex = %hex::encode(&mpt_value_bytes), "Slot has value from MPT");
             match get_semantic_u256_bytes(&mpt_value_bytes) {
                 Ok(semantic_bytes) => {
-                    processed_semantic_values.insert(proved_key, semantic_bytes);
+                    let is_zero = semantic_bytes == [0u8; 32];
+                    tracing::debug!(slot_key = ?proved_key, semantic_hex = %hex::encode(&semantic_bytes), is_zero = is_zero, "Processed semantic bytes");
+
+                    // check if this is actually a zero value that should be considered non-existent
+                    if is_zero && mpt_value_bytes.is_empty() {
+                        tracing::info!(slot_key = ?proved_key, "Slot has empty MPT value, treating as non-existent. Excluding from attestation.");
+                        non_existent_slots.push(proved_key);
+                    } else {
+                        processed_semantic_values.insert(proved_key, semantic_bytes);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(slot_key = ?proved_key, error = %e, "Failed to get semantic uint256 bytes for slot. It will be excluded from attestation if it was a target slot.");
                 }
             }
         } else {
-            // Non-existent storage slots have a default value of zero
-            tracing::info!(slot_key = ?proved_key, "Slot proven but does not exist (None). Using default value of zero.");
-            let zero_value = [0u8; 32];
-            processed_semantic_values.insert(proved_key, zero_value);
+            // non-existent storage slots are excluded from final attestation
+            tracing::info!(slot_key = ?proved_key, "Slot proven but does not exist (None). Excluding from attestation.");
+            non_existent_slots.push(proved_key);
         }
     }
     lap_processing.stop(timings);
 
-    let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(2);
+    if !non_existent_slots.is_empty() {
+        let non_existent_json = serde_json::json!({
+            "non_existent_slots": non_existent_slots.iter().map(|slot| format!("0x{}", hex::encode(slot.as_ref()))).collect::<Vec<_>>(),
+            "count": non_existent_slots.len(),
+            "message": "These slots do not exist and are excluded from the final attestation"
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&non_existent_json)
+                .unwrap_or_else(|_| "Failed to serialize non-existent slots".to_string())
+        );
+    }
 
-    for (i, target_slot_key) in target_slot_keys.iter().enumerate() {
+    let mut attested_slots_data: Vec<SlotProofData> = Vec::with_capacity(target_slot_keys.len());
+
+    // only include slots that actually exist
+    for target_slot_key in target_slot_keys.iter() {
         if let Some(semantic_bytes) = processed_semantic_values.get(target_slot_key) {
             attested_slots_data.push(SlotProofData {
                 slot_key: *target_slot_key,
                 value_hash: keccak256(semantic_bytes).into(),
             });
-        } else {
-            anyhow::bail!(
-                "Proof value for target slot {} ({:?}) not found or failed to process.",
-                i + 1,
-                target_slot_key
-            );
         }
     }
 
