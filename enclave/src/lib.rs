@@ -123,7 +123,7 @@ struct ZkTlsProverCli {
 #[no_mangle]
 pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("off"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .try_init();
