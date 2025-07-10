@@ -3,16 +3,20 @@ use rlp::Rlp;
 use crate::{
     error::{ProofVerificationError, ProofVerificationResult},
     eth::{primitives::B256, proof::ProofResponse},
+    timing::{Lap, Timings},
     utils::keccak256,
 };
 
 pub fn verify_proof(
     resp: ProofResponse,
     state_root: &[u8],
+    timings: &mut Timings,
 ) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
     // 1. Verify the account proof
+    let lap_account = Lap::new("verify_mpt_proof::account");
     let address = resp.address.0.as_slice();
     let storage_root = verify_account_proof(&resp, state_root, address)?;
+    lap_account.stop(timings);
 
     assert_eq!(
         resp.storage_hash.0.as_slice(),
@@ -21,7 +25,9 @@ pub fn verify_proof(
     );
 
     // 2. Verify the storage proof
+    let lap_storage = Lap::new("verify_mpt_proof::storage");
     let values = verify_storage_proof(&resp, &storage_root)?;
+    lap_storage.stop(timings);
 
     Ok(values)
 }
@@ -151,13 +157,36 @@ fn verify_storage_proof(
                     }
                 };
             } else {
-                assert_eq!(decoded.item_count()?, 2);
-                let value_decoded = decoded.at(1)?;
-                assert!(value_decoded.is_data());
-                let raw = value_decoded.as_raw();
-                let value: Vec<u8> = rlp::decode(raw)?;
-
-                values.push((proof.key, Some(value)));
+                // Handle the last node in the proof
+                let item_count = decoded.item_count()?;
+                match item_count {
+                    2 => {
+                        let value_decoded = decoded.at(1)?;
+                        if value_decoded.is_data() {
+                            let raw = value_decoded.as_raw();
+                            let value: Vec<u8> = rlp::decode(raw)?;
+                            values.push((proof.key, Some(value)));
+                        } else {
+                            // empty value case
+                            values.push((proof.key, None));
+                        }
+                    }
+                    17 => {
+                        // branch node => key doesn't exist
+                        tracing::debug!(
+                            "Storage slot {:?} does not exist (proof ends at branch node)",
+                            proof.key
+                        );
+                        values.push((proof.key, None));
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "Unexpected node type in storage proof: {} items",
+                            item_count
+                        );
+                        values.push((proof.key, None));
+                    }
+                }
             }
         }
         if !values.iter().any(|(k, _)| *k == proof.key) {

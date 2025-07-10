@@ -1,11 +1,10 @@
-use std::io::{BufRead, Read};
 
 use anyhow::Result;
-use automata_sgx_sdk::types::SgxStatus;
+use ruint::aliases::U256 as RuintU256;
 use serde::Deserialize;
 use tiny_keccak::{Hasher, Keccak};
 
-use crate::attestation_data::AttestationPayload;
+use crate::{attestation_data::AttestationPayload, eth::primitives::B256};
 
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut res = [0u8; 32];
@@ -15,41 +14,7 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     res
 }
 
-pub(crate) fn extract_body(response: &str) -> Result<String> {
-    let mut parts = response.splitn(2, "\r\n\r\n");
-    let headers = parts.next().ok_or(SgxStatus::Unexpected)?;
-    let body = parts.next().ok_or(SgxStatus::Unexpected)?;
 
-    if headers.contains("Transfer-Encoding: chunked") {
-        decode_chunked_body(body)
-    } else {
-        Ok(body.to_string())
-    }
-}
-
-fn decode_chunked_body(body: &str) -> Result<String> {
-    let mut reader = std::io::BufReader::new(body.as_bytes());
-    let mut decoded = Vec::new();
-    loop {
-        let mut chunk_size_hex = String::new();
-        reader.read_line(&mut chunk_size_hex)?;
-        let chunk_size_hex = chunk_size_hex.trim();
-        if chunk_size_hex.is_empty() {
-            continue;
-        }
-        let chunk_size = usize::from_str_radix(chunk_size_hex, 16)?;
-        if chunk_size == 0 {
-            break;
-        }
-        let mut chunk_data = vec![0u8; chunk_size];
-        reader.read_exact(&mut chunk_data)?;
-        decoded.extend_from_slice(&chunk_data);
-        let mut crlf = [0u8; 2];
-        reader.read_exact(&mut crlf)?;
-    }
-    String::from_utf8(decoded)
-        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 sequence in chunked body: {}", e))
-}
 
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
@@ -72,6 +37,38 @@ pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8;
         report_data[32..64].copy_from_slice(&slot_commitment_hash);
     }
     Ok(report_data)
+}
+
+
+
+
+pub(crate) fn parse_slots_to_prove(slots_str: &str) -> Result<Vec<B256>> {
+    let slot_numbers: Result<Vec<u64>, _> = slots_str
+        .split(',')
+        .map(|s| s.trim().parse::<u64>())
+        .collect();
+    
+    let slot_numbers = slot_numbers
+        .map_err(|e| anyhow::anyhow!("Invalid slot number format: {}", e))?;
+    
+    if slot_numbers.len() > 1000 {
+        anyhow::bail!("Requested too many slots to prove (max 1000): {}", slot_numbers.len());
+    }
+
+    let mut slot_keys = Vec::with_capacity(slot_numbers.len());
+    for slot_number in slot_numbers {
+        let slot_u256 = RuintU256::from(slot_number);
+        let slot_key: B256 = slot_u256.to_be_bytes().into();
+        slot_keys.push(slot_key);
+    }
+
+    tracing::debug!(
+        slots_count = slot_keys.len(),
+        first_slot = ?slot_keys.first(),
+        last_slot = ?slot_keys.last(),
+        "Parsed storage slots to prove"
+    );
+    Ok(slot_keys)
 }
 
 pub(crate) fn get_semantic_u256_bytes(bytes_after_first_mpt_decode: &[u8]) -> Result<[u8; 32]> {

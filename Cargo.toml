@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["app", "enclave"]
+members = ["app", "enclave", "mock-lib"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,6 +11,8 @@ homepage = "https://www.ata.network/"
 [workspace.dependencies]
 automata-sgx-sdk = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
 automata-build-script = { git = "https://github.com/automata-network/automata-sgx-sdk", branch = "main" }
+
+mock-lib = { path = "mock-lib" }
 
 hex = "0.4"
 clap = "3.2"
@@ -25,13 +27,9 @@ thiserror = "2.0.12"
 ruint = "1.12.0"
 
 bytes = "1.5.0"
-sgx-ocalls = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
-tls-enclave = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
-untrusted-host = { git = "https://github.com/Diffuse-fi/zktls-enclave", rev = "2564e9d5fd88eeba86dc5198b5fe3e68a4bd0e7a" }
+reqwest = { version = "0.11", features = ["blocking", "json"] }
 
 
 rlp = "0.6.1"
 
-[patch.crates-io]
-ring = { git = "https://github.com/automata-network/ring-sgx", rev = "e9b37b8f5a7c3331b21a6650f1ce6653d70d0923" }
 
