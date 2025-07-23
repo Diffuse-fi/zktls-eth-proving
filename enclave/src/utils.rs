@@ -43,22 +43,28 @@ pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8;
 
 
 pub(crate) fn parse_slots_to_prove(slots_str: &str) -> Result<Vec<B256>> {
-    let slot_numbers: Result<Vec<u64>, _> = slots_str
+    let slot_numbers: Result<Vec<RuintU256>, _> = slots_str
         .split(',')
-        .map(|s| s.trim().parse::<u64>())
+        .map(|s| {
+            let s = s.trim();
+            if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                RuintU256::from_str_radix(hex, 16)
+            } else {
+                RuintU256::from_str_radix(s, 10)
+            }
+        })
         .collect();
-    
+
     let slot_numbers = slot_numbers
         .map_err(|e| anyhow::anyhow!("Invalid slot number format: {}", e))?;
-    
+
     if slot_numbers.len() > 1000 {
         anyhow::bail!("Requested too many slots to prove (max 1000): {}", slot_numbers.len());
     }
 
     let mut slot_keys = Vec::with_capacity(slot_numbers.len());
     for slot_number in slot_numbers {
-        let slot_u256 = RuintU256::from(slot_number);
-        let slot_key: B256 = slot_u256.to_be_bytes().into();
+        let slot_key: B256 = slot_number.to_be_bytes().into();
         slot_keys.push(slot_key);
     }
 
