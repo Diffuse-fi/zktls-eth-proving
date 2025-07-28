@@ -8,6 +8,7 @@ use crate::timing::Timings;
 pub struct SlotProofData {
     pub slot_key: B256,
     pub value_hash: B256,
+    pub value_unhashed: B256,
 }
 
 /// Data to be included in the SGX report_data field commitment.
