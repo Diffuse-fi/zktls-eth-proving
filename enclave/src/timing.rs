@@ -1,6 +1,6 @@
-use std::time::Instant;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::time::Instant;
 
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct Timings {
