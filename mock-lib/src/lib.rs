@@ -13,11 +13,9 @@ pub extern "C" fn ocall_make_http_request(
     actual_response_len: *mut usize,
     http_status: *mut u16,
 ) {
-
     let url_str = unsafe { CStr::from_ptr(url).to_str().unwrap() };
     let method_str = unsafe { CStr::from_ptr(method).to_str().unwrap() };
     let body_slice = unsafe { slice::from_raw_parts(body, body_len) };
-
 
     let client = Client::new();
 
@@ -32,7 +30,6 @@ pub extern "C" fn ocall_make_http_request(
             return;
         }
     };
-
 
     match res {
         Ok(resp) => {

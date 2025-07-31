@@ -1,4 +1,3 @@
-
 use anyhow::Result;
 use ruint::aliases::U256 as RuintU256;
 use serde::Deserialize;
@@ -14,8 +13,6 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     res
 }
 
-
-
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub(crate) struct RpcResponse<T> {
@@ -28,31 +25,24 @@ pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8;
     let mut report_data = [0u8; 64];
     report_data[0..32].copy_from_slice(payload.block_hash.as_ref());
 
-    if !payload.proven_slots.is_empty() {
-        let mut concatenated_value_hashes = Vec::new();
-        for slot_data in &payload.proven_slots {
-            concatenated_value_hashes.extend_from_slice(slot_data.value_hash.as_ref());
-        }
-        let slot_commitment_hash = keccak256(&concatenated_value_hashes);
-        report_data[32..64].copy_from_slice(&slot_commitment_hash);
-    }
+    report_data[32..40].copy_from_slice(&payload.block_number.to_be_bytes());
     Ok(report_data)
 }
-
-
-
 
 pub(crate) fn parse_slots_to_prove(slots_str: &str) -> Result<Vec<B256>> {
     let slot_numbers: Result<Vec<u64>, _> = slots_str
         .split(',')
         .map(|s| s.trim().parse::<u64>())
         .collect();
-    
-    let slot_numbers = slot_numbers
-        .map_err(|e| anyhow::anyhow!("Invalid slot number format: {}", e))?;
-    
+
+    let slot_numbers =
+        slot_numbers.map_err(|e| anyhow::anyhow!("Invalid slot number format: {}", e))?;
+
     if slot_numbers.len() > 1000 {
-        anyhow::bail!("Requested too many slots to prove (max 1000): {}", slot_numbers.len());
+        anyhow::bail!(
+            "Requested too many slots to prove (max 1000): {}",
+            slot_numbers.len()
+        );
     }
 
     let mut slot_keys = Vec::with_capacity(slot_numbers.len());

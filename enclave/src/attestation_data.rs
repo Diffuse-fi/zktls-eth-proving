@@ -1,7 +1,6 @@
 use serde::Serialize;
 
-use crate::eth::primitives::B256;
-use crate::timing::Timings;
+use crate::{eth::primitives::B256, timing::Timings};
 
 /// Information about a single proven slot.
 #[derive(Serialize, Debug, Clone)]
