@@ -3,12 +3,20 @@ mod error;
 pub(crate) mod eth;
 mod timing;
 mod trie;
+mod uniswap3;
 mod utils;
 
 use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
 
 use automata_sgx_sdk::types::SgxStatus;
-use clap::Parser;
+use clap::{Parser, ErrorKind};
+// use clap::Parser;
+
+pub use uniswap3::{
+    compute_mapping_slot_key,
+    position,
+    is_tick_initialized
+};
 
 use crate::{
     attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
@@ -84,6 +92,38 @@ struct TimingDebugOutput {
     timings: Timings,
 }
 
+struct CliParams {
+    rpc_url: String,
+    address: String,
+    block_number: String,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum PoolType {
+    Uniswap3,
+    Pendle,
+    Slots,
+}
+
+impl FromStr for PoolType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "uniswap3" => Ok(PoolType::Uniswap3),
+            "pendle" => Ok(PoolType::Pendle),
+            "slots" => Ok(PoolType::Slots),
+            _ => Err(format!("unknown pool type `{}`; valid: uniswap3, pendle, slots", s)),
+        }
+    }
+}
+
+struct StorageProvingConfig {
+    rpc_url: String,
+    address: String,
+    storage_slots: Vec<B256>,
+    block_number: String
+}
+
 #[derive(Parser, Debug, Clone)]
 #[clap(
     author = "Diffuse",
@@ -110,7 +150,7 @@ struct ZkTlsProverCli {
         short = 's',
         help = "List of storage slots to prove (comma-separated, e.g., '0,1,2,3')"
     )]
-    slots_to_prove: String,
+    slots_to_prove: Option<String>,
     #[clap(
         long,
         short = 'B',
@@ -118,99 +158,57 @@ struct ZkTlsProverCli {
         help = "Block number (e.g., 'latest', '0x1234AB')"
     )]
     block_number: String,
+    #[clap(
+        long,
+        short = 'p',
+        default_value = "slots",
+        help = "Choose either pool type to calculate price impact(uniswap3, pendle) or just prove storage slots (slots)"
+    )]
+    pool_type: PoolType,
 }
 
-#[derive(Debug)]
-pub struct Slot0 { // https://github.com/Uniswap/v3-core/blob/d8b1c635c275d2a9450bd6a78f3fa2484fef73eb/contracts/UniswapV3Pool.sol#L56
-    pub sqrt_price_x96: [u8; 20],
-    pub tick: i32,
-    pub observation_index: u16,
-    pub observation_cardinality: u16,
-    pub observation_cardinality_next: u16,
-    pub fee_protocol: u8,
-    pub unlocked: bool,
-}
 
-impl Slot0 { // deserialize raw storage slot to struct
-    pub fn from_bytes(raw: &[u8; 32]) -> Self {
-        let mut sqrt_price_x96 = [0u8; 20];
-        sqrt_price_x96.copy_from_slice(&raw[12..32]);
+impl ZkTlsProverCli {
+    fn get_storage_proving_config(&self) -> Result<StorageProvingConfig, clap::Error> {
+        let params_helper = |storage_slots: Vec<B256>| StorageProvingConfig {
+            rpc_url: self.rpc_url.clone(),
+            address: self.address.clone(),
+            storage_slots,
+            block_number: self.block_number.clone(),
+        };
 
-        let tick_bytes = &raw[9..12];
-        let mut buf32 = [0u8; 4];
-        buf32[0] = if tick_bytes[0] & 0x80 != 0 { 0xFF } else { 0x00 };
-        buf32[1..4].copy_from_slice(tick_bytes);
-        let tick = i32::from_be_bytes(buf32);
+        if self.pool_type == PoolType::Slots {
+            if self
+                .slots_to_prove
+                .as_ref()
+                .map(|s| s.trim().is_empty())
+                .unwrap_or(true)
+            {
+                return Err(clap::Error::raw(
+                    clap::ErrorKind::MissingRequiredArgument,
+                    "`--slots-to-prove` is required when `--pool-type=slots`",
+                ));
+            }
 
-        let mut buf16 = [0u8; 2];
-        buf16.copy_from_slice(&raw[7..9]);
-        let observation_index = u16::from_be_bytes(buf16);
+            let raw = self.slots_to_prove.as_ref().unwrap();
+            let storage_slots = parse_slots_to_prove(raw).map_err(|e| {
+                clap::Error::raw(
+                    clap::ErrorKind::InvalidValue,
+                    format!("failed to parse slots from `{}`: {e}", raw),
+                )
+            })?;
 
-        buf16.copy_from_slice(&raw[5..7]);
-        let observation_cardinality = u16::from_be_bytes(buf16);
-
-        buf16.copy_from_slice(&raw[3..5]);
-        let observation_cardinality_next = u16::from_be_bytes(buf16);
-
-        let fee_protocol = raw[2];
-
-        let unlocked = raw[1] != 0;
-
-        Slot0 {
-            sqrt_price_x96,
-            tick,
-            observation_index,
-            observation_cardinality,
-            observation_cardinality_next,
-            fee_protocol,
-            unlocked,
+            Ok(params_helper(storage_slots))
+        } else {
+            if self.slots_to_prove.is_some() {
+                tracing::warn!(
+                    "--slots-to-prove passed but pool-type is {:?}; ignoring slots",
+                    self.pool_type
+                );
+            }
+            Ok(params_helper(Vec::new()))
         }
     }
-}
-
-
-// keccak(abiEncoded(key, mappingSlot))
-fn compute_mapping_slot_key(key: i32, mapping_slot: u64) -> [u8; 32] {
-    let mut buffer = [0u8; 64];
-
-    // i16: first 28 bytes are sign, next 4 are i16 value itself
-    let sign_byte = if key < 0 { 0xFF } else { 0x00 };
-    for byte in &mut buffer[0..28] {
-        *byte = sign_byte;
-    }
-    let [highest, hi, lo, lowest] = key.to_be_bytes();
-    buffer[28] = highest;
-    buffer[29] = hi;
-    buffer[30] = lo;
-    buffer[31] = lowest;
-
-    // uint256: 24 zero bytes, next 8 bytes u64
-    let slot_bytes = mapping_slot.to_be_bytes();
-    buffer[32 + (32 - 8)..64].copy_from_slice(&slot_bytes);
-
-    tracing::debug!(abi_encoded = %hex::encode(buffer), "abi encoded values for mapping slot key calculation");
-
-    keccak256(&buffer)
-}
-
-
-fn position(tick: i32) -> (i32, u8) {
-    let word_pos = (tick.div_euclid(256)) as i32;
-    let bit_pos  = tick.rem_euclid(256) as u8;
-    (word_pos, bit_pos)
-}
-
-
-fn is_tick_initialized(compressed_tick: i32, tick_bitmap_hashmap: &HashMap<i32, B256>) -> bool {
-    let (word_pos, bit_pos) = position(compressed_tick);
-    let tick_bitmap = tick_bitmap_hashmap.get(&word_pos);
-
-    let byte_index: usize = (31 - (bit_pos / 8)).into();
-    let bit_in_byte = bit_pos % 8;
-
-    let b = tick_bitmap.unwrap().0[byte_index];
-    let mask = 1 << bit_in_byte;
-    b & mask != 0
 }
 
 
@@ -224,7 +222,17 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         .try_init();
 
     let cli = ZkTlsProverCli::parse();
-    tracing::info!(config = ?cli, "Starting proving process with configuration");
+
+    let storage_proving_config = match ZkTlsProverCli::get_storage_proving_config(&cli) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{}", e); // TODO tracing::warn!
+            return SgxStatus::InvalidParameter;
+        }
+    };
+
+
+    // tracing::info!(config = ?cli, "Starting proving process with configuration");
 
     let total_timer_start = std::time::Instant::now();
     let mut timings = Timings::default();
@@ -232,14 +240,14 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     println! ("REQUESTING SLOT0\n=========================================================\n");
 
     // request slot 0
-    let my_slots = "0".to_string();
-    // TODO rewrite to pass non string values
-    let new_cli = ZkTlsProverCli {
-        slots_to_prove: my_slots,
-        ..cli.clone()
+    let new_storage_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: vec![eth::primitives::FixedBytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])],
+        block_number: storage_proving_config.block_number.clone(),
     };
 
-    let attestation_payload: AttestationPayload = match extract_storage_slots_with_merkle_proving(new_cli, &mut timings, total_timer_start) {
+    let attestation_payload: AttestationPayload = match extract_storage_slots_with_merkle_proving(new_storage_proving_config, &mut timings, total_timer_start) {
         Ok(res) => res,
         Err(e) => {
             tracing::warn!(error = %e, "extract_storage_slots_with_merkle_proving error.");
@@ -252,7 +260,7 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     tracing::info!(slot.value_unhashed = %hex::encode(slot.value_unhashed), "Slot 0 unhashed value");
 
     let raw_bytes: &[u8; 32] = &slot.value_unhashed.0;
-    let slot0 = Slot0::from_bytes(raw_bytes);
+    let slot0 = uniswap3::Slot0::from_bytes(raw_bytes);
 
     tracing::info!(slot0.tick = slot0.tick, "Current tick");
 
@@ -262,17 +270,24 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let key_bitmap_neg1_slotkey = compute_mapping_slot_key(-1, 6);
     let key_bitmap_zero_slotkey = compute_mapping_slot_key(0, 6);
 
+
+
     let hex1 = hex::encode(key_bitmap_neg1_slotkey);
     let hex2 = hex::encode(key_bitmap_zero_slotkey);
 
-    let bitmap_slotkeys = format!("0x{}, 0x{}", hex1, hex2);
 
-    let bitmap_cli = ZkTlsProverCli {
-        slots_to_prove: bitmap_slotkeys,
-        ..cli.clone()
+    let bitmaps_slots_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: vec![
+            eth::primitives::FixedBytes(key_bitmap_neg1_slotkey),
+            eth::primitives::FixedBytes(key_bitmap_zero_slotkey)
+        ],
+        block_number: storage_proving_config.block_number.clone(),
     };
 
-    let bitmaps_storage_slots = match extract_storage_slots_with_merkle_proving(bitmap_cli, &mut timings, total_timer_start) {
+
+    let bitmaps_storage_slots = match extract_storage_slots_with_merkle_proving(bitmaps_slots_proving_config, &mut timings, total_timer_start) {
         Ok(res) => res,
         Err(err) => {
             println! ("extract_storage_slots_with_merkle_proving error {}", err);
@@ -325,21 +340,21 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     tick_slot_keys.push([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4]); // current liquidity as last element
 
 
-    let all_initialized_ticks_slotkeys = tick_slot_keys
-        .iter()
-        .map(|key| format!("0x{}", hex::encode(key)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let tick_slot_keys_fixedbytes: Vec<eth::primitives::FixedBytes<32>> = tick_slot_keys
+        .into_iter()
+        .map(|slot| eth::primitives::FixedBytes::<32>(slot))
+        .collect();
 
-    println!("all_initialized_ticks_slotkeys: {}", all_initialized_ticks_slotkeys);
 
-    let initialized_ticks_cli = ZkTlsProverCli {
-        slots_to_prove: all_initialized_ticks_slotkeys,
-        ..cli.clone()
+    let initialized_ticks_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: tick_slot_keys_fixedbytes,
+        block_number: storage_proving_config.block_number.clone(),
     };
 
 
-    let initialized_ticks_storage_slots = match extract_storage_slots_with_merkle_proving(initialized_ticks_cli, &mut timings, total_timer_start) {
+    let initialized_ticks_storage_slots = match extract_storage_slots_with_merkle_proving(initialized_ticks_proving_config, &mut timings, total_timer_start) {
         Ok(res) => res,
         Err(err) => {
             println! ("extract_storage_slots_with_merkle_proving error {}", err);
@@ -404,16 +419,17 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
 }
 
 fn extract_storage_slots_with_merkle_proving(
-    cli: ZkTlsProverCli,
+    cli: StorageProvingConfig,
     timings: &mut Timings,
     total_timer_start: std::time::Instant,
 ) -> anyhow::Result<AttestationPayload> {
     let contract_address = Address::from_str(&cli.address)
         .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
 
-    tracing::info!(rpc_url = %cli.rpc_url, %contract_address, block_tag = %cli.block_number, slots_to_prove = %cli.slots_to_prove, "Proving parameters");
+    // tracing::info!(rpc_url = %cli.rpc_url, %contract_address, block_tag = %cli.block_number, slots_to_prove = %cli.slots_to_prove, "Proving parameters");
 
-    let target_slot_keys = parse_slots_to_prove(&cli.slots_to_prove)?;
+    // let target_slot_keys = parse_slots_to_prove(&cli.slots_to_prove)?;
+    let target_slot_keys= cli.storage_slots;
 
     let lap1 = Lap::new("get_block_header");
     let block_header = get_block_header_from_rpc(&cli.rpc_url, &cli.block_number, timings)?;
