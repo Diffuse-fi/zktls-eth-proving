@@ -1,3 +1,7 @@
+use crate::utils;
+use crate::eth;
+use crate::timing;
+
 use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
 
 use crate::{
@@ -12,7 +16,9 @@ use crate::{
     trie::verify_proof,
     utils::{
         construct_report_data, get_semantic_u256_bytes, keccak256, parse_slots_to_prove,
+        extract_storage_slots_with_merkle_proving,
         RpcResponse,
+        StorageProvingConfig,
     },
 };
 
@@ -110,3 +116,188 @@ pub fn is_tick_initialized(compressed_tick: i32, tick_bitmap_hashmap: &HashMap<i
     b & mask != 0
 }
 
+pub fn uniswap3_logic(
+    storage_proving_config: utils::StorageProvingConfig,
+    timings: &mut Timings,
+    total_timer_start: std::time::Instant,
+// ) -> Result<> {
+) -> bool { // TODO fugure out what to return from here
+        println! ("REQUESTING SLOT0\n=========================================================\n");
+
+    // request slot 0
+    let new_storage_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: vec![eth::primitives::FixedBytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])],
+        block_number: storage_proving_config.block_number.clone(),
+    };
+
+    let attestation_payload: AttestationPayload = match extract_storage_slots_with_merkle_proving(new_storage_proving_config, timings, total_timer_start) {
+        Ok(res) => res,
+        Err(e) => {
+            tracing::warn!(error = %e, "extract_storage_slots_with_merkle_proving error.");
+            return false;
+        }
+    };
+    let proofs: &Vec<SlotProofData> = &attestation_payload.proven_slots;
+    let slot = &proofs[0];
+
+    tracing::info!(slot.value_unhashed = %hex::encode(slot.value_unhashed), "Slot 0 unhashed value");
+
+    let raw_bytes: &[u8; 32] = &slot.value_unhashed.0;
+    let slot0 = Slot0::from_bytes(raw_bytes);
+
+    tracing::info!(slot0.tick = slot0.tick, "Current tick");
+
+    println! ("\n=========================================================\nREQUESTING TICK BITMAPS\n=========================================================\n");
+
+    // TODO ugly hardcoded code
+    let key_bitmap_neg1_slotkey = compute_mapping_slot_key(-1, 6);
+    let key_bitmap_zero_slotkey = compute_mapping_slot_key(0, 6);
+
+
+
+    let hex1 = hex::encode(key_bitmap_neg1_slotkey);
+    let hex2 = hex::encode(key_bitmap_zero_slotkey);
+
+
+    let bitmaps_slots_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: vec![
+            eth::primitives::FixedBytes(key_bitmap_neg1_slotkey),
+            eth::primitives::FixedBytes(key_bitmap_zero_slotkey)
+        ],
+        block_number: storage_proving_config.block_number.clone(),
+    };
+
+
+    let bitmaps_storage_slots = match extract_storage_slots_with_merkle_proving(bitmaps_slots_proving_config, timings, total_timer_start) {
+        Ok(res) => res,
+        Err(err) => {
+            println! ("extract_storage_slots_with_merkle_proving error {}", err);
+            return false;
+        }
+    };
+
+    let mut tick_bitmaps_hashmap: HashMap<i32, B256> = HashMap::new();
+    tick_bitmaps_hashmap.insert(-1, bitmaps_storage_slots.proven_slots[0].value_unhashed);
+    tick_bitmaps_hashmap.insert(0, bitmaps_storage_slots.proven_slots[1].value_unhashed);
+
+
+    // TODO figure out how to print it in the tracing
+    // println! ("bitmaps_storage_slots.proven_slots[0].value_unhashed: {}", bitmaps_storage_slots.proven_slots[0].value_unhashed);
+    // println! ("bitmaps_storage_slots.proven_slots[1].value_unhashed: {}", bitmaps_storage_slots.proven_slots[1].value_unhashed);
+
+    let mut curr_tick = slot0.tick + 1;
+    curr_tick += 1; // TODO this stuff with euclid
+    let mut next_tick = curr_tick;
+
+    let mut initialized_ticks: Vec<i32> = Vec::new();
+    // TODO: skipping current range
+    // initialized_ticks.push(curr_tick);
+
+    while next_tick < 256 {
+        curr_tick = next_tick;
+
+        while next_tick < 256 && !is_tick_initialized(next_tick, &tick_bitmaps_hashmap) {
+            next_tick += 1;
+        }
+
+        if next_tick >= 256 {
+            break;
+        }
+        next_tick += 1;
+        initialized_ticks.push(curr_tick - 1); // TODO: have no idea why I have to add -1 here, but curr_tick were uninitialized
+        // maybe this stuff with euclid is wrong
+
+        println! ("range: {} - {}", curr_tick, next_tick);
+    }
+
+    let mut tick_slot_keys: Vec<[u8;32]> = Vec::new();
+    for initialized_tick in &initialized_ticks {
+        let slot_key = compute_mapping_slot_key(*initialized_tick, 5/*ticks slot*/);
+        println! ("initialized_tick {}, slot_key: {}", initialized_tick, hex::encode(slot_key));
+
+        tick_slot_keys.push(slot_key);
+    }
+
+    tick_slot_keys.push([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4]); // current liquidity as last element
+
+
+    let tick_slot_keys_fixedbytes: Vec<eth::primitives::FixedBytes<32>> = tick_slot_keys
+        .into_iter()
+        .map(|slot| eth::primitives::FixedBytes::<32>(slot))
+        .collect();
+
+
+    let initialized_ticks_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: storage_proving_config.address.clone(),
+        storage_slots: tick_slot_keys_fixedbytes,
+        block_number: storage_proving_config.block_number.clone(),
+    };
+
+
+    let initialized_ticks_storage_slots = match extract_storage_slots_with_merkle_proving(initialized_ticks_proving_config, timings, total_timer_start) {
+        Ok(res) => res,
+        Err(err) => {
+            println! ("extract_storage_slots_with_merkle_proving error {}", err);
+            return false;
+        }
+    };
+
+    let curr_liquidity_fixedbytes = initialized_ticks_storage_slots.proven_slots.last().expect("proven_slots is empty").value_unhashed;
+    let mut net_bytes = [0u8; 16];
+    net_bytes.copy_from_slice(&curr_liquidity_fixedbytes.0[16..32]);
+    let mut curr_liquidity: i128 = i128::from_be_bytes(net_bytes);
+    println! ("curr liquidity: {}", curr_liquidity);
+
+    for (i, tick) in initialized_ticks.iter().enumerate() {
+        println!("{}: {:?}", i, tick);
+        println! ("initialized_ticks_storage_slots.proven_slots[i].value_unhashed: {}", initialized_ticks_storage_slots.proven_slots[i].value_unhashed);
+
+        let raw: [u8; 32] = initialized_ticks_storage_slots.proven_slots[i].value_unhashed.0;
+        // int128 liquidityNet is first 16 bytes
+        let mut net_bytes = [0u8; 16];
+        net_bytes.copy_from_slice(&raw[0..16]);
+        let liquidity_net: i128 = i128::from_be_bytes(net_bytes);
+        println!("liquidityNet = {}", liquidity_net);
+        curr_liquidity += liquidity_net;
+        println!("curr_liquidity = {}", curr_liquidity);
+
+    }
+
+
+    let lap_report = Lap::new("construct_report_data");
+
+    let report_data: [u8; 64] = match construct_report_data(&attestation_payload) {
+        Ok(res) => {
+            res
+        }
+        Err(err) =>
+        {
+            println!("construct_report_data failed: {}", err);
+            return false;
+        }
+    };
+    lap_report.stop(timings);
+    tracing::debug!(report_data_hex = %hex::encode(report_data), "Constructed report_data for DCAP quote");
+
+    let lap4 = Lap::new("dcap_quote_generation");
+    let quote_bytes = match automata_sgx_sdk::dcap::dcap_quote(report_data) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            println!("DCAP quote generation failed: {:?}", e);
+            return false;
+        }
+    };
+
+    lap4.stop(timings);
+    tracing::info!(
+        quote_len = quote_bytes.len(),
+        "DCAP quote generated successfully"
+    );
+
+    return true;
+}
