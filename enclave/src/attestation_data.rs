@@ -17,4 +17,5 @@ pub struct SlotsProofPayload {
     pub block_hash: B256,
     pub block_number: u64,
     pub proven_slots: Vec<SlotProofData>,
+    pub block_timestamp: u64,
 }

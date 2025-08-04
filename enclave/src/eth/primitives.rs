@@ -76,7 +76,7 @@ impl<const N: usize> Encodable for FixedBytes<N> {
 }
 
 impl FromStr for U256 {
-    type Err = Box<dyn std::error::Error>;
+    type Err = Box<dyn std::error::Error + Send + Sync>;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(U256(Uint::<256, 4>::from_str(s)?))
@@ -97,6 +97,16 @@ impl U256 {
         } else {
             Ok(U256(value.0))
         }
+    }
+
+    pub const fn from_be_bytes<const BYTES: usize>(bytes: [u8; BYTES]) -> Self {
+        Self(Uint::from_be_bytes::<BYTES>(bytes))
+    }
+}
+
+impl fmt::Display for U256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -168,5 +178,16 @@ impl<const N: usize> Serialize for FixedBytes<N> {
         S: Serializer,
     {
         serializer.serialize_str(&format!("0x{}", hex::encode(self.0)))
+    }
+}
+
+impl B256 {
+    pub const ZERO: Self = FixedBytes([0u8; 32]);
+
+    pub fn from_u8(value: u8) -> Self {
+        B256::from([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, value,
+        ])
     }
 }

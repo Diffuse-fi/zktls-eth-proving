@@ -1,6 +1,7 @@
 mod attestation_data;
 mod error;
 pub(crate) mod eth;
+mod pendle;
 mod timing;
 mod trie;
 mod utils;
@@ -9,6 +10,8 @@ use std::str::FromStr;
 
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
+
+pub use pendle::pendle_logic;
 
 use crate::{
     eth::aliases::{B256, U256},
@@ -23,12 +26,6 @@ use crate::{
 struct TimingDebugOutput {
     error: String,
     timings: Timings,
-}
-
-struct CliParams {
-    rpc_url: String,
-    address: String,
-    block_number: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -94,15 +91,18 @@ struct ZkTlsProverCli {
         help = "Choose either pool type to calculate price impact(uniswap3, pendle) or just prove storage slots (slots)"
     )]
     pool_type: PoolType,
+    #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
+    tokens_amount: Option<U256>,
 }
 
 impl ZkTlsProverCli {
     fn get_storage_proving_config(&self) -> Result<StorageProvingConfig, clap::Error> {
-        let params_helper = |storage_slots: Vec<B256>| StorageProvingConfig {
+        let params_helper = |storage_slots: Vec<B256>, tokens_amount: U256| StorageProvingConfig {
             rpc_url: self.rpc_url.clone(),
             address: self.address.clone(),
             storage_slots,
             block_number: self.block_number.clone(),
+            tokens_amount,
         };
 
         if self.pool_type == PoolType::Slots {
@@ -118,6 +118,13 @@ impl ZkTlsProverCli {
                 ));
             }
 
+            if self.tokens_amount.is_some() {
+                tracing::warn!(
+                    "--tokens-amount passed but pool-type is {:?}; ignoring tokens amount",
+                    self.pool_type
+                );
+            }
+
             let raw = self.slots_to_prove.as_ref().unwrap();
             let storage_slots = parse_slots_to_prove(raw).map_err(|e| {
                 clap::Error::raw(
@@ -126,15 +133,26 @@ impl ZkTlsProverCli {
                 )
             })?;
 
-            Ok(params_helper(storage_slots))
+            Ok(params_helper(storage_slots, U256::ZERO))
         } else {
+            let tokens_amount = self.tokens_amount.ok_or_else(|| {
+                clap::Error::raw(
+                    clap::ErrorKind::MissingRequiredArgument,
+                    format!(
+                        "`--tokens-amount` is required when `--pool-type={:?}`",
+                        self.pool_type
+                    ),
+                )
+            })?;
+
             if self.slots_to_prove.is_some() {
                 tracing::warn!(
                     "--slots-to-prove passed but pool-type is {:?}; ignoring slots",
                     self.pool_type
                 );
             }
-            Ok(params_helper(Vec::new()))
+
+            Ok(params_helper(Vec::new(), tokens_amount))
         }
     }
 }
@@ -172,8 +190,15 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             // uniswap3_logic(&storage_proving_config, &mut timings, total_timer_start);
         }
         PoolType::Pendle => {
-            todo!("implement pendle logic");
-            // pendle_logic(&storage_proving_config, &mut timings, total_timer_start);
+            let _pendle_output =
+                match pendle_logic(&storage_proving_config, &mut timings, total_timer_start) {
+                    Ok(res) => res,
+                    Err(err) => {
+                        tracing::warn!("Error occured during pendle logic execution: {}", err);
+                        return SgxStatus::Unexpected;
+                    }
+                };
+            tracing::warn!("penlde outputs dcap quote with empty report data");
         }
         PoolType::Slots => {
             let slots_proving_output = match extract_storage_slots_with_merkle_proving(
