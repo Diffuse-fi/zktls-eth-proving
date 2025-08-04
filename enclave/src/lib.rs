@@ -2,6 +2,7 @@ mod attestation_data;
 mod error;
 pub(crate) mod eth;
 mod mock_v0;
+mod pendle;
 mod timing;
 mod trie;
 mod utils;
@@ -10,6 +11,8 @@ use std::str::FromStr;
 
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
+
+pub use pendle::pendle_logic;
 
 use crate::{
     attestation_data::{AttestationPayload, CleanProvingResultOutput, ProvingResultOutput},
@@ -98,6 +101,8 @@ struct ZkTlsProverCli {
         help = "Choose either pool type to calculate price impact(uniswap3, pendle)"
     )]
     pool_type: PoolType,
+    #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
+    tokens_amount: U256,
 }
 
 #[no_mangle]
@@ -264,8 +269,37 @@ fn verify_attestation_with_timing(
 
             // Extract price data from each block for this strategy
             for (block_number, _) in &all_blocks {
-                let concrete_price_data = todo!("implement pendle logic");
-                price_data.push(concrete_price_data);
+                // todo do we need to pass header
+                // todo block nr should be str or u64 everywhere
+                let block_header = get_block_header_from_rpc(&cli.rpc_url.clone(), &block_number.to_string(), timings)?;
+
+                let storage_proving_config = &utils::StorageProvingConfig {
+                    rpc_url: cli.rpc_url.clone(),
+                    address: strategy_address,
+                    storage_slots: Vec::new(),
+                    block_number: block_number.clone(),
+                    tokens_amount: cli.tokens_amount
+                };
+
+                let pendle_output = match pendle_logic(
+                    storage_proving_config,
+                    timings,
+                    total_timer_start,
+                    block_header,
+                ) {
+                    Ok(res) => res,
+                    Err(e) => {
+                        todo!("handle pendle errors properly");
+                    }
+                };
+                let concrete_price_data = pendle_output.exact_sy_out;
+                // todo which type should we use? in solidity is us I256
+                // todo handle pendle putput hashing
+
+                price_data.push(PriceData{
+                    block_number: *block_number,
+                    price: concrete_price_data.0.as_limbs()[0].into(), // todo: band-aided to compile
+                });
             }
 
             // If we have no price data, validation fails

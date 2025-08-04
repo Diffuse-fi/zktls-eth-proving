@@ -26,9 +26,9 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
 #[derive(Clone)]
 pub struct StorageProvingConfig {
     pub(crate) rpc_url: String,
-    pub(crate) address: String,
+    pub(crate) address: Address,
     pub(crate) storage_slots: Vec<B256>,
-    pub(crate) block_number: String,
+    pub(crate) block_number: u64,
     pub(crate) tokens_amount: U256,
 }
 
@@ -114,7 +114,7 @@ extern "C" {
     );
 }
 
-fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
+pub(crate) fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
     const MAX_RESPONSE_LEN: usize = 256 * 1024 * 4 * 4;
     let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
     let mut actual_response_len: usize = 0;
@@ -249,8 +249,7 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
     total_timer_start: std::time::Instant,
     block_header: Header,
 ) -> anyhow::Result<SlotsProofPayload> {
-    let contract_address = Address::from_str(&cli.address)
-        .map_err(|e| anyhow::anyhow!("Invalid contract address format '{}': {}", cli.address, e))?;
+    let contract_address = cli.address;
 
     let target_slot_keys = &cli.storage_slots;
 
