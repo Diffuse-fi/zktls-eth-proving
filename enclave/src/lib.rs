@@ -1,6 +1,7 @@
 mod attestation_data;
 mod error;
 pub(crate) mod eth;
+mod pendle;
 mod timing;
 mod trie;
 mod uniswap3;
@@ -11,6 +12,10 @@ use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
 use automata_sgx_sdk::types::SgxStatus;
 use clap::{Parser, ErrorKind};
 // use clap::Parser;
+
+pub use pendle::{
+    pendle_logic
+};
 
 pub use uniswap3::{
     compute_mapping_slot_key,
@@ -186,7 +191,8 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     //     // pendle => pendle_logic(storage_proving_config, timings),
     //     // slots => slots_logic(storage_proving_config, timings)
     // }
-    uniswap3_logic(storage_proving_config, &mut timings, total_timer_start);
+    // uniswap3_logic(storage_proving_config, &mut timings, total_timer_start);
+    pendle_logic(storage_proving_config, &mut timings, total_timer_start);
 
 
     // tracing::info!(config = ?cli, "Starting proving process with configuration");
