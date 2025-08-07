@@ -1,10 +1,12 @@
 use serde::Serialize;
 
-use crate::{eth::primitives::B256, timing::Timings};
+use crate::eth::primitives::{Address, B256};
+use crate::timing::Timings;
 
 /// Information about a single proven slot.
 #[derive(Serialize, Debug, Clone)]
 pub struct SlotProofData {
+    pub address: Address,
     pub slot_key: B256,
     pub value_hash: B256,
 }
@@ -13,8 +15,10 @@ pub struct SlotProofData {
 /// This structure itself is not directly put into report_data, but hashed.
 #[derive(Serialize, Debug, Clone)]
 pub struct AttestationPayload {
-    pub block_hash: B256,
-    pub block_number: u64,
+    pub blocks: Vec<(u64, B256)>,
+    pub vault_positions: Vec<(Address, u64)>,
+    pub final_blocks_hash: B256,
+    pub final_positions_hash: B256,
     pub proven_slots: Vec<SlotProofData>,
 }
 
@@ -25,4 +29,12 @@ pub struct ProvingResultOutput {
     pub attestation_payload: AttestationPayload,
     pub sgx_quote_hex: String,
     pub timings: Timings,
+}
+
+/// Clean JSON output without timing information for parsing.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanProvingResultOutput {
+    pub attestation_payload: AttestationPayload,
+    pub sgx_quote_hex: String,
 }
