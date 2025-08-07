@@ -38,6 +38,7 @@ pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u
     let mut data = Vec::new();
     for (vault_address, position_id) in vault_position_pairs {
         data.extend_from_slice(vault_address.as_ref()); // 20 bytes
+        data.extend_from_slice(&[0u8; 4]); // 4 bytes of padding
         data.extend_from_slice(&position_id.to_be_bytes()); // 8 bytes
     }
     println!("hex data positions hash: {}", hex::encode(&data));
