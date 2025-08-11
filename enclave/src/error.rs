@@ -11,6 +11,9 @@ pub(crate) enum ProofVerificationError {
     #[error("Storage proof verification failed: Unexpected node structure at depth {0}")]
     StorageProofInvalidNode(usize),
 
+    #[error("Liquidation price validation failed: {reason}")]
+    LiquidationPriceValidationFailed { reason: String },
+
     #[error(transparent)]
     Rlp(#[from] rlp::DecoderError),
 }

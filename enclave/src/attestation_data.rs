@@ -9,6 +9,7 @@ pub struct SlotProofData {
     pub address: Address,
     pub slot_key: B256,
     pub value_hash: B256,
+    pub value: Option<[u8; 32]>, // Store actual slot value for price validation
 }
 
 /// Data to be included in the SGX report_data field commitment.

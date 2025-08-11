@@ -1,6 +1,7 @@
 mod attestation_data;
 mod error;
 pub(crate) mod eth;
+mod mock_v0;
 mod timing;
 mod trie;
 mod utils;
@@ -18,6 +19,7 @@ use crate::{
         primitives::{Address, B256},
         proof::ProofResponse,
     },
+    mock_v0::{validate_liquidation_price, parse_price_from_slot, PriceData, SLOT_TO_PROVE_MOCK},
     timing::{Lap, Timings},
     trie::verify_proof,
     utils::{
@@ -90,6 +92,7 @@ struct ProvingTask {
     slots: Vec<u64>,
     vault_address: String,
     position_id: u64,
+    liquidation_price: Option<u128>,
 }
 
 #[derive(Parser, Debug)]
@@ -115,7 +118,7 @@ struct ZkTlsProverCli {
     #[clap(
         long,
         short = 't',
-        help = "JSON array of proving tasks, e.g., '[{\"address\":\"0x123...\",\"slots\":[0,1],\"vault_address\":\"0xabc...\",\"position_id\":20}]'"
+        help = "JSON array of proving tasks, e.g., '[{\"address\":\"0x123...\",\"slots\":[0,1],\"vault_address\":\"0xabc...\",\"position_id\":20,\"liquidation_price\":1000}]'"
     )]
     proving_tasks: String,
 }
@@ -418,6 +421,7 @@ fn verify_attestation_with_timing(
                         address: contract_address,
                         slot_key: *target_slot_key,
                         value_hash: keccak256(semantic_bytes).into(),
+                        value: Some(*semantic_bytes), // Store actual value for price validation
                     });
                 }
             }
@@ -454,7 +458,102 @@ fn verify_attestation_with_timing(
         total_attested_slots = all_attested_slots.len(),
         total_blocks = all_blocks.len(),
         task_count = proving_tasks.len(),
-        "All blocks and tasks completed, preparing attestation payload"
+        "All blocks and tasks completed, validating liquidation prices"
+    );
+
+    // Validate liquidation prices for tasks that specify them
+    for task in &proving_tasks {
+        if let Some(liquidation_price) = task.liquidation_price {
+            tracing::info!(
+                vault_address = %task.vault_address,
+                position_id = task.position_id,
+                liquidation_price = liquidation_price,
+                "Validating liquidation price"
+            );
+
+            // Collect price data from strategy slot 5 across all blocks
+            let mut price_data: Vec<PriceData> = Vec::new();
+            let strategy_address = Address::from_str(&task.address).map_err(|e| {
+                anyhow::anyhow!("Invalid strategy address format '{}': {}", task.address, e)
+            })?;
+
+            // Check if slot 5 is included in the proving data
+            if !task.slots.contains(&SLOT_TO_PROVE_MOCK) {
+                anyhow::bail!(
+                    "Task for address {} with liquidation_price requires slot {} to be proven",
+                    task.address,
+                    SLOT_TO_PROVE_MOCK
+                );
+            }
+
+            let mut slot_5_key_bytes = [0u8; 32];
+            slot_5_key_bytes[31] = SLOT_TO_PROVE_MOCK as u8;
+            let slot_5_key = B256::from(slot_5_key_bytes);
+
+            // Extract price data from each block for this strategy
+            for (block_number, _) in &all_blocks {
+                // Find matching attested slot data
+                for slot_data in &all_attested_slots {
+                    if slot_data.address == strategy_address && slot_data.slot_key == slot_5_key {
+                        if let Some(slot_value) = slot_data.value {
+                            // Parse price from actual slot value
+                            let slot_b256 = B256::from(slot_value);
+                            let price = parse_price_from_slot(&slot_b256);
+                            price_data.push(PriceData {
+                                block_number: *block_number,
+                                price,
+                            });
+                            tracing::debug!(
+                                block_number = block_number,
+                                price = price,
+                                "Extracted price from strategy slot"
+                            );
+                        } else {
+                            tracing::warn!(
+                                block_number = block_number,
+                                "Slot data exists but no actual value stored"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // If we have no price data, validation fails
+            if price_data.is_empty() {
+                anyhow::bail!(
+                    "No price data found for strategy {} slot {} across {} blocks - ensure slot is proven",
+                    task.address,
+                    SLOT_TO_PROVE_MOCK,
+                    all_blocks.len()
+                );
+            }
+
+            // Calculate TWAP and validate
+            let validation = validate_liquidation_price(liquidation_price, &price_data)?;
+            
+            if !validation.is_valid {
+                anyhow::bail!(
+                    "Liquidation price validation failed for position {} in vault {}: {}",
+                    task.position_id,
+                    task.vault_address,
+                    validation.reason.unwrap_or_else(|| "Unknown reason".to_string())
+                );
+            }
+
+            tracing::info!(
+                vault_address = %task.vault_address,
+                position_id = task.position_id,
+                liquidation_price = validation.liquidation_price,
+                twap_price = validation.twap_price,
+                price_difference_pct = validation.price_difference_pct * 100.0,
+                "Liquidation price validation passed"
+            );
+        }
+    }
+
+    tracing::info!(
+        "Liquidation price validation completed, preparing attestation payload"
     );
 
     // Calculate final hashes per DOC.md spec
