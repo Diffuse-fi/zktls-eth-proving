@@ -1,5 +1,4 @@
 use super::{BigIntConversionError, ParseSignedError, Sign, Signed, utils::twos_complement};
-use alloc::string::String;
 use core::str::FromStr;
 use ruint::{ToUintError, Uint, UintTryFrom};
 
@@ -289,7 +288,23 @@ macro_rules! impl_conversions {
 impl_conversions! {
     u8   [low_u64  -> low_u8,    as_u8],    i8   [low_u64  -> low_i8,    as_i8];
     u16  [low_u64  -> low_u16,   as_u16],   i16  [low_u64  -> low_i16,   as_i16];
-    u32  [low_u64  -> low_u32,   as_u32],   i32  [low_u64  -> low_i32,   as_i32];
     u64  [low_u64  -> low_u64,   as_u64],   i64  [low_u64  -> low_i64,   as_i64];
     usize[low_u64  -> low_usize, as_usize], isize[low_u64  -> low_isize, as_isize];
 }
+
+impl<const BITS: usize, const LIMBS: usize> From<i32> for Signed<BITS, LIMBS> {
+    #[inline]
+    fn from(value: i32) -> Self {
+        Self::try_from(value).expect("i32 should always fit in Signed<BITS, LIMBS>")
+    }
+}
+
+
+impl<const BITS: usize, const LIMBS: usize> From<u32> for Signed<BITS, LIMBS> {
+    #[inline]
+    fn from(value: u32) -> Self {
+        let u = Uint::<BITS, LIMBS>::from(value);
+        Signed::checked_from_sign_and_abs(Sign::Positive, u).unwrap()
+    }
+}
+

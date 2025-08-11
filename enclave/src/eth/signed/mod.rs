@@ -8,7 +8,7 @@ mod errors;
 pub use errors::{BigIntConversionError, ParseSignedError};
 
 /// Signed integer type wrapping a [`ruint::Uint`].
-mod int;
+pub mod int;
 pub use int::Signed;
 
 /// Operation implementations.
