@@ -1,5 +1,4 @@
 mod market_math_core;
-mod pendle_market_v3;
 
 use crate::utils;
 use crate::eth;
@@ -12,7 +11,8 @@ use crate::{
     eth::{
         block::Block,
         header::Header,
-        primitives::{Address, B256},
+        signed::int::I256,
+        primitives::{Address, B256, U256},
         proof::ProofResponse,
     },
     timing::{Lap, Timings},
@@ -61,6 +61,9 @@ pub fn pendle_logic(
             return false;
         }
     };
+    println! ("let test");
+
+    let test: U256 = U256::from_b256(market_storage_storage_slots.proven_slots[0].value_unhashed);
 
     let mut market_storage_hashmap: HashMap<i32, B256> = HashMap::new();
     market_storage_hashmap.insert(10, market_storage_storage_slots.proven_slots[0].value_unhashed);
@@ -114,7 +117,7 @@ pub fn pendle_logic(
     // uint96 lastLnImpliedRate is first 12 bytes
     let mut ln_rate_bytes = [0u8; 16];
     ln_rate_bytes[4..16].copy_from_slice(&raw_slot_11[32-12..32]);
-    let ln_rate_from_storage: i128 = i128::from_be_bytes(ln_rate_bytes);
+    let ln_rate_from_storage: u128 = u128::from_be_bytes(ln_rate_bytes);
     println!("ln_rate_from_storage = {}", ln_rate_from_storage);
 
     // uint16 observationIndex is next 2 bytes
@@ -135,33 +138,45 @@ pub fn pendle_logic(
     let obs_card_next_from_storage: i128 = i128::from_be_bytes(obs_card_next_bytes);
     println!("obs_card_next_from_storage = {}", obs_card_next_from_storage);
 
+
+    let scalar_root_from_storage = I256::ZERO;  // TODO immutable from contract code
+    let expiry_from_storage = U256::ZERO;  // TODO immutable from contract code
+    let ln_fee_rate_root_from_storage = U256::ZERO; // TODO immutable or from other contract's (factory) storage IPMarketFactoryV3(factory).getMarketConfig(address(this),router);
+    let reserve_fee_percent_from_storage = U256::ZERO;  // TODO: from other contract's (factory) storage IPMarketFactoryV3(factory).getMarketConfig(address(this),router);
+
+
     // in solidity market is constructed in PendleParketV3.readState,
     // but here we access storage in mod.rs, so I decided to construct market here
     // and pass it to swap_exact_pt_for_sy as imput
+    println! ("let market");
     let market: market_math_core::MarketState = market_math_core::MarketState {
-        total_pt: total_pt_from_storage,
-        total_sy: total_sy_from_storage,
-        scalar_root: 0, // TODO immutable from contract code
-        expiry: 0, // TODO immutable from contract code
-        ln_fee_rate_root: 0, // TODO immutable or from other contract's (factory) storage IPMarketFactoryV3(factory).getMarketConfig(address(this),router);
-        reserve_fee_percent: 0, // TODO: from other contract's (factory) storage IPMarketFactoryV3(factory).getMarketConfig(address(this),router);
-        last_ln_implied_rate: ln_rate_from_storage,
+        total_pt: I256::try_from(total_pt_from_storage).unwrap(),
+        total_sy: I256::try_from(total_sy_from_storage).unwrap(),
+        scalar_root: scalar_root_from_storage,
+        expiry: expiry_from_storage,
+        ln_fee_rate_root: ln_fee_rate_root_from_storage,
+        reserve_fee_percent: reserve_fee_percent_from_storage,
+        last_ln_implied_rate: U256::new(ln_rate_from_storage),
     };
 
-    let block_timestamp = 0; // TODO extract bock timestamp
+    println! ("let index");
+    let index = U256::ZERO; // TODO YT.newIndex()
+    let exact_pt_in: U256 = U256::ZERO;
+    let block_timestamp = U256::ZERO; // TODO extract bock timestamp
 
-    let exact_pt_in: B256 = 0;
-    let index = 0;
-
+    println! ("let exact_sy_out");
     let exact_sy_out = market_math_core::swap_exact_pt_for_sy(
         market,
         index,
         exact_pt_in,
-        block_timestamp
+        block_timestamp,
     );
+    println! ("let exact_sy_out ended");
+
+    // return net_sy_out;
 
 
-    let price = exact_sy_out / exact_pt_in;
+    // let price = exact_sy_out / exact_pt_in;
 
     return true;
 }
