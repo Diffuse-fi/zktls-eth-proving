@@ -25,8 +25,9 @@ impl From<ruint::ParseError> for ParseSignedError {
     }
 }
 
-impl core::error::Error for ParseSignedError {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+// impl core::error::Error for ParseSignedError {
+impl std::error::Error for ParseSignedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             #[cfg(feature = "std")]
             Self::Ruint(err) => Some(err),
@@ -48,7 +49,7 @@ impl fmt::Display for ParseSignedError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BigIntConversionError;
 
-impl core::error::Error for BigIntConversionError {}
+impl std::error::Error for BigIntConversionError {}
 
 impl fmt::Display for BigIntConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

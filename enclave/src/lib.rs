@@ -13,7 +13,7 @@ use clap::Parser;
 
 use crate::{
     attestation_data::{AttestationPayload, CleanProvingResultOutput, ProvingResultOutput},
-    eth::primitives::{Address, B256, U256},
+    eth::aliases::{Address, B256, U256},
     mock_v0::{validate_liquidation_price, PriceData},
     timing::{Lap, Timings},
     utils::{
@@ -90,7 +90,7 @@ struct ZkTlsProverCli {
     )]
     proving_tasks: String,
     #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
-    pt_tokens_amount: U256,
+    pt_tokens_amount: String,
     #[clap(
         long,
         short = 'p',

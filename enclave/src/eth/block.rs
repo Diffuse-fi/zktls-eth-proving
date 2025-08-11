@@ -1,4 +1,8 @@
-use crate::eth::{de, header::Header, primitives::*};
+use crate::eth::{
+    aliases::{Address, B256},
+    de,
+    header::Header,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

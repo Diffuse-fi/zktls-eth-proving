@@ -6,9 +6,9 @@ use tiny_keccak::{Hasher, Keccak};
 use crate::{
     attestation_data::{AttestationPayload, SlotProofData, SlotsProofPayload},
     eth::{
+        aliases::{Address, B256, U256},
         block::Block,
         header::Header,
-        primitives::{Address, B256, U256},
         proof::ProofResponse,
     },
     timing::{Lap, Timings},

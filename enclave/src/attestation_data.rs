@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::eth::primitives::{Address, B256};
+use crate::eth::aliases::{Address, B256};
 use crate::timing::Timings;
 
 /// Information about a single proven slot.

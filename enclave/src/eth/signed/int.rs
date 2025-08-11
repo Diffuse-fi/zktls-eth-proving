@@ -1,5 +1,5 @@
-use super::{ParseSignedError, Sign, utils::*};
-use alloc::string::String;
+use super::{utils::*, ParseSignedError, Sign};
+// use alloc::string::String;
 use core::fmt;
 use ruint::{BaseConvertError, Uint, UintTryFrom, UintTryTo};
 
@@ -50,8 +50,12 @@ use ruint::{BaseConvertError, Uint, UintTryFrom, UintTryTo};
 /// assert_eq!(I256::ONE, I256::unchecked_from(1));
 /// assert_eq!(I256::MINUS_ONE, I256::unchecked_from(-1));
 /// ```
+
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(derive_arbitrary::Arbitrary, proptest_derive::Arbitrary))]
+#[cfg_attr(
+    feature = "arbitrary",
+    derive(arbitrary::Arbitrary, proptest_derive::Arbitrary)
+)]
 pub struct Signed<const BITS: usize, const LIMBS: usize>(pub(crate) Uint<BITS, LIMBS>);
 
 // formatting
@@ -66,7 +70,11 @@ impl<const BITS: usize, const LIMBS: usize> fmt::Display for Signed<BITS, LIMBS>
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (sign, abs) = self.into_sign_and_abs();
         sign.fmt(f)?;
-        if f.sign_plus() { write!(f, "{abs}") } else { abs.fmt(f) }
+        if f.sign_plus() {
+            write!(f, "{abs}")
+        } else {
+            abs.fmt(f)
+        }
     }
 }
 
@@ -222,7 +230,11 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
     /// Determines if the integer is odd.
     #[inline]
     pub const fn is_odd(&self) -> bool {
-        if BITS == 0 { false } else { self.as_limbs()[0] % 2 == 1 }
+        if BITS == 0 {
+            false
+        } else {
+            self.as_limbs()[0] % 2 == 1
+        }
     }
 
     /// Compile-time equality. NOT constant-time equality.
@@ -352,7 +364,11 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
     #[inline]
     pub fn checked_from_sign_and_abs(sign: Sign, abs: Uint<BITS, LIMBS>) -> Option<Self> {
         let (result, overflow) = Self::overflowing_from_sign_and_abs(sign, abs);
-        if overflow { None } else { Some(result) }
+        if overflow {
+            None
+        } else {
+            Some(result)
+        }
     }
 
     /// Convert from a decimal string.
@@ -536,13 +552,10 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BigIntConversionError, ParseSignedError, aliases::*};
-    use alloc::string::ToString;
+    use crate::eth::aliases::I256;
+    use crate::eth::signed::{BigIntConversionError, ParseSignedError};
     use core::ops::Neg;
-    use ruint::{
-        BaseConvertError, ParseError,
-        aliases::U256,
-    };
+    use ruint::{aliases::U256, BaseConvertError, ParseError};
 
     // type U2 = Uint<2, 1>;
 
@@ -645,7 +658,6 @@ mod tests {
             };
         }
 
-
         run_test!(I256, U256);
     }
 
@@ -690,10 +702,8 @@ mod tests {
             };
         }
 
-
         run_test!(I256, U256);
     }
-
 
     #[test]
     fn formatting() {
@@ -784,7 +794,9 @@ mod tests {
     fn neg() {
         macro_rules! run_test {
             ($i_struct:ty, $u_struct:ty) => {
-                let positive = <$i_struct>::from_dec_str("3141592653589793").unwrap().sign();
+                let positive = <$i_struct>::from_dec_str("3141592653589793")
+                    .unwrap()
+                    .sign();
                 let negative = -positive;
 
                 assert_eq!(-positive, negative);
@@ -819,7 +831,6 @@ mod tests {
         run_test!(I256, U256);
     }
 
-
     #[test]
     fn addition() {
         macro_rules! run_test {
@@ -850,7 +861,10 @@ mod tests {
 
                 assert_eq!(<$i_struct>::ZERO + <$i_struct>::ZERO, <$i_struct>::ZERO);
 
-                assert_eq!(<$i_struct>::MAX.saturating_add(<$i_struct>::MAX), <$i_struct>::MAX);
+                assert_eq!(
+                    <$i_struct>::MAX.saturating_add(<$i_struct>::MAX),
+                    <$i_struct>::MAX
+                );
                 assert_eq!(
                     <$i_struct>::MIN.saturating_add(<$i_struct>::MINUS_ONE),
                     <$i_struct>::MIN
@@ -896,8 +910,14 @@ mod tests {
 
                 assert_eq!(<$i_struct>::ZERO - <$i_struct>::ZERO, <$i_struct>::ZERO);
 
-                assert_eq!(<$i_struct>::MAX.saturating_sub(<$i_struct>::MIN), <$i_struct>::MAX);
-                assert_eq!(<$i_struct>::MIN.saturating_sub(<$i_struct>::ONE), <$i_struct>::MIN);
+                assert_eq!(
+                    <$i_struct>::MAX.saturating_sub(<$i_struct>::MIN),
+                    <$i_struct>::MAX
+                );
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_sub(<$i_struct>::ONE),
+                    <$i_struct>::MIN
+                );
             };
         }
 
@@ -923,7 +943,10 @@ mod tests {
                     <$i_struct>::try_from(-42).unwrap()
                 );
 
-                assert_eq!(<$i_struct>::MAX.saturating_mul(<$i_struct>::MAX), <$i_struct>::MAX);
+                assert_eq!(
+                    <$i_struct>::MAX.saturating_mul(<$i_struct>::MAX),
+                    <$i_struct>::MAX
+                );
                 assert_eq!(
                     <$i_struct>::MAX.saturating_mul(<$i_struct>::try_from(2).unwrap()),
                     <$i_struct>::MAX
@@ -933,7 +956,10 @@ mod tests {
                     <$i_struct>::MAX
                 );
 
-                assert_eq!(<$i_struct>::MIN.saturating_mul(<$i_struct>::MAX), <$i_struct>::MIN);
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_mul(<$i_struct>::MAX),
+                    <$i_struct>::MIN
+                );
                 assert_eq!(
                     <$i_struct>::MIN.saturating_mul(<$i_struct>::try_from(2).unwrap()),
                     <$i_struct>::MIN
@@ -963,7 +989,10 @@ mod tests {
                     (<$i_struct>::MIN, true)
                 );
 
-                assert_eq!(<$i_struct>::MIN / <$i_struct>::MAX, <$i_struct>::try_from(-1).unwrap());
+                assert_eq!(
+                    <$i_struct>::MIN / <$i_struct>::MAX,
+                    <$i_struct>::try_from(-1).unwrap()
+                );
                 assert_eq!(<$i_struct>::MAX / <$i_struct>::MIN, <$i_struct>::ZERO);
 
                 assert_eq!(<$i_struct>::MIN / <$i_struct>::ONE, <$i_struct>::MIN);

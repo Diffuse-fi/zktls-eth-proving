@@ -2,7 +2,7 @@ use rlp::Rlp;
 
 use crate::{
     error::{ProofVerificationError, ProofVerificationResult},
-    eth::{primitives::B256, proof::ProofResponse},
+    eth::{aliases::B256, proof::ProofResponse},
     timing::{Lap, Timings},
     utils::keccak256,
 };

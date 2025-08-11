@@ -1,6 +1,6 @@
 use super::{
-    Sign, Signed,
     utils::{handle_overflow, twos_complement},
+    Sign, Signed,
 };
 use core::{cmp, ops};
 use ruint::Uint;
@@ -34,9 +34,12 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
         if BITS == 0 {
             return (self, false);
         }
-        if self == Self::MIN { (self, true) } else { (Self(self.unsigned_abs()), false) }
+        if self == Self::MIN {
+            (self, true)
+        } else {
+            (Self(self.unsigned_abs()), false)
+        }
     }
-
 
     /// Computes the absolute value of `self` without any wrapping or panicking.
     #[inline]
@@ -57,7 +60,11 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
         if BITS == 0 {
             return (self, false);
         }
-        if self == Self::MIN { (self, true) } else { (Self(twos_complement(self.0)), false) }
+        if self == Self::MIN {
+            (self, true)
+        } else {
+            (Self(twos_complement(self.0)), false)
+        }
     }
 
     /// Checked negation. Computes `-self`, returning `None` if `self == MIN`.
@@ -350,8 +357,8 @@ impl<const BITS: usize, const LIMBS: usize> cmp::Ord for Signed<BITS, LIMBS> {
         // TODO(nlordell): Once subtraction is implemented:
         // self.saturating_sub(*other).signum64().partial_cmp(&0)
 
-        use Sign::*;
         use cmp::Ordering::*;
+        use Sign::*;
 
         match (self.into_sign_and_abs(), other.into_sign_and_abs()) {
             ((Positive, _), (Negative, _)) => Greater,
