@@ -3,7 +3,7 @@ use rlp::encode;
 use serde::Deserialize;
 
 use crate::{
-    eth::{de, primitives::*},
+    eth::{aliases::*, de},
     utils::keccak256,
 };
 

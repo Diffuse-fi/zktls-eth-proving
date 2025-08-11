@@ -2,7 +2,7 @@ use bytes::Bytes;
 use ruint::Uint;
 use serde::{self, Deserialize, Deserializer};
 
-use crate::eth::primitives::{FixedBytes, U256};
+use crate::eth::{aliases::U256, primitives::FixedBytes};
 
 pub fn hex_u64<'de, D>(de: D) -> Result<u64, D::Error>
 where

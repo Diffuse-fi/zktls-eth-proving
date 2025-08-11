@@ -1,5 +1,4 @@
-use super::{BigIntConversionError, ParseSignedError, Sign, Signed, utils::twos_complement};
-use alloc::string::String;
+use super::{utils::twos_complement, BigIntConversionError, ParseSignedError, Sign, Signed};
 use core::str::FromStr;
 use ruint::Uint;
 
@@ -123,7 +122,10 @@ impl<const BITS: usize, const LIMBS: usize> TryFrom<Signed<BITS, LIMBS>> for u12
             return Err(BigIntConversionError);
         }
 
-        value.into_raw().try_into().map_err(|_| BigIntConversionError)
+        value
+            .into_raw()
+            .try_into()
+            .map_err(|_| BigIntConversionError)
     }
 }
 

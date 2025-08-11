@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::primitives::*;
+use super::aliases::{Address, B256};
 
 /// Storage-proof leaf (only parts needed by the verifier).
 #[derive(Debug, Deserialize)]

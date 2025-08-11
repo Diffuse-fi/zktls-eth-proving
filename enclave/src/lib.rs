@@ -11,9 +11,8 @@ use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
 
 use crate::{
-    attestation_data::SlotsProofPayload,
-    eth::primitives::B256,
-    timing::{Lap, Timings},
+    eth::aliases::{B256, U256},
+    timing::Timings,
     utils::{
         construct_report_data, extract_storage_slots_with_merkle_proving, parse_slots_to_prove,
         StorageProvingConfig,
