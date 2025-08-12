@@ -30,7 +30,6 @@ pub(crate) fn calculate_final_blocks_hash(blocks: &[(u64, B256)]) -> [u8; 32] {
         data.extend_from_slice(&block_number_32);     // 32 bytes
         data.extend_from_slice(block_hash.as_ref());  // 32 bytes
     }
-    println!("hex data blocs hash: {}", hex::encode(&data));
     keccak256(&data)
 }
 
@@ -41,7 +40,6 @@ pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u
         data.extend_from_slice(&[0u8; 4]); // 4 bytes of padding
         data.extend_from_slice(&position_id.to_be_bytes()); // 8 bytes
     }
-    println!("hex data positions hash: {}", hex::encode(&data));
     keccak256(&data)
 }
 

@@ -435,23 +435,19 @@ fn verify_attestation_with_timing(
         }
     }
 
-    // Report all non-existent slots
+    // Log non-existent slots to tracing instead of stdout
     if !all_non_existent_slots.is_empty() {
-        let non_existent_json = serde_json::json!({
-            "non_existent_slots": all_non_existent_slots.iter().map(|(addr, slot)| {
-                serde_json::json!({
-                    "address": format!("0x{}", hex::encode(addr.as_ref())),
-                    "slot": format!("0x{}", hex::encode(slot.as_ref()))
-                })
-            }).collect::<Vec<_>>(),
-            "count": all_non_existent_slots.len(),
-            "message": "These slots do not exist and are excluded from the final attestation"
-        });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&non_existent_json)
-                .unwrap_or_else(|_| "Failed to serialize non-existent slots".to_string())
+        tracing::warn!(
+            "Excluding {} non-existent slots from attestation",
+            all_non_existent_slots.len()
         );
+        for (addr, slot) in &all_non_existent_slots {
+            tracing::debug!(
+                "Non-existent slot: address=0x{}, slot=0x{}", 
+                hex::encode(addr.as_ref()),
+                hex::encode(slot.as_ref())
+            );
+        }
     }
 
     tracing::info!(
