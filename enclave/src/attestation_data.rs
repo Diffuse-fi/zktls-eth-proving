@@ -7,6 +7,7 @@ use crate::timing::Timings;
 #[derive(Serialize, Debug, Clone)]
 pub struct SlotProofData {
     pub address: Address,
+    #[serde(rename = "slotKey")]
     pub slot_key: B256,
     #[serde(skip_serializing)]
     pub value_hash: B256,
@@ -19,9 +20,13 @@ pub struct SlotProofData {
 #[derive(Serialize, Debug, Clone)]
 pub struct AttestationPayload {
     pub blocks: Vec<(u64, B256)>,
+    #[serde(rename = "vaultPositions")]
     pub vault_positions: Vec<(Address, u64)>,
+    #[serde(rename = "finalBlocksHash")]
     pub final_blocks_hash: B256,
+    #[serde(rename = "finalPositionsHash")]
     pub final_positions_hash: B256,
+    #[serde(rename = "provenSlots")]
     pub proven_slots: Vec<SlotProofData>,
 }
 
