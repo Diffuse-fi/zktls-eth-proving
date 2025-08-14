@@ -192,7 +192,7 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     //     // slots => slots_logic(storage_proving_config, timings)
     // }
     // uniswap3_logic(storage_proving_config, &mut timings, total_timer_start);
-    pendle_logic(storage_proving_config, &mut timings, total_timer_start);
+    pendle_logic(&storage_proving_config, &mut timings, total_timer_start);
 
 
     // tracing::info!(config = ?cli, "Starting proving process with configuration");

@@ -105,6 +105,17 @@ impl U256 {
             Ok(U256(value.0))
         }
     }
+
+    pub const fn from_be_bytes<const BYTES: usize>(bytes: [u8; BYTES]) -> Self {
+        Self(Uint::from_be_bytes::<BYTES>(bytes))
+    }
+
+}
+
+impl fmt::Display for U256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 impl Add for U256 {

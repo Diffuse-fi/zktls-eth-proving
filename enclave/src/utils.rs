@@ -29,6 +29,7 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     res
 }
 
+#[derive(Clone)]
 pub(crate) struct StorageProvingConfig {
     pub(crate) rpc_url: String,
     pub(crate) address: String,
@@ -143,7 +144,7 @@ extern "C" {
     );
 }
 
-fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
+pub(crate) fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow::Result<String> {
     const MAX_RESPONSE_LEN: usize = 256 * 1024 * 4 * 4;
     let mut response_buffer = vec![0u8; MAX_RESPONSE_LEN];
     let mut actual_response_len: usize = 0;
@@ -377,6 +378,7 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
         block_hash: block_header.hash(),
         block_number: block_number_val,
         proven_slots: attested_slots_data,
+        block_timestamp: block_header.timestamp,
     })
 
 }
