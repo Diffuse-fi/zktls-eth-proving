@@ -3,8 +3,7 @@
 // implements structs and functions from MarketMathCore.sol
 // https://github.com/pendle-finance/pendle-core-v2-public/blob/6573ff85ca28b0f4fb5f6b7e2a1468fa7d0aa00b/contracts/core/Market/MarketMathCore.sol
 
-use crate::eth::signed::int::I256;
-
+use crate::eth::aliases::*;
 
 
 pub fn ln(a: I256) -> I256 {
@@ -55,30 +54,30 @@ fn _ln_36(x_inp: I256) -> I256 {
 
     // In each step, the numerator is multiplied by z^2
     num = (num * z_squared) / one_36;
-    series_sum += num / 3;
+    series_sum += num / I256::unchecked_from(3);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 5;
+    series_sum += num / I256::unchecked_from(5);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 7;
+    series_sum += num / I256::unchecked_from(7);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 9;
+    series_sum += num / I256::unchecked_from(9);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 11;
+    series_sum += num / I256::unchecked_from(11);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 13;
+    series_sum += num / I256::unchecked_from(13);
 
     num = (num * z_squared) / one_36;
-    series_sum += num / 15;
+    series_sum += num / I256::unchecked_from(15);
 
     // 8 Taylor terms are sufficient for 36 decimal precision.
 
     // All that remains is multiplying by 2 (non fixed point).
-    return series_sum * 2;
+    return series_sum * I256::unchecked_from(2);
 }
 
 /**
@@ -156,8 +155,8 @@ fn _ln(a_inp: I256) -> I256 {
     }
 
     // All other a_n and x_n are stored as 20 digit fixed point numbers, so we convert the sum and a to this format.
-    sum *= 100;
-    a *= 100;
+    sum *= I256::unchecked_from(100);
+    a *= I256::unchecked_from(100);
 
     // Because further a_n are  20 digit fixed point numbers, we multiply by ONE_20 when dividing by them.
 
@@ -229,30 +228,30 @@ fn _ln(a_inp: I256) -> I256 {
 
     // In each step, the numerator is multiplied by z^2
     num = (num * z_squared) / one_20;
-    series_sum += num / 3;
+    series_sum += num / I256::unchecked_from(3);
 
     num = (num * z_squared) / one_20;
-    series_sum += num / 5;
+    series_sum += num / I256::unchecked_from(5);
 
     num = (num * z_squared) / one_20;
-    series_sum += num / 7;
+    series_sum += num / I256::unchecked_from(7);
 
     num = (num * z_squared) / one_20;
-    series_sum += num / 9;
+    series_sum += num / I256::unchecked_from(9);
 
     num = (num * z_squared) / one_20;
-    series_sum += num / 11;
+    series_sum += num / I256::unchecked_from(11);
 
     // 6 Taylor terms are sufficient for 36 decimal precision.
 
     // Finally, we multiply by 2 (non fixed point) to compute ln(remainder)
-    series_sum *= 2;
+    series_sum *= I256::unchecked_from(2);
 
     // We now have the sum of all x_n present, and the Taylor approximation of the logarithm of the remainder (both
     // with 20 decimals). All that remains is to sum these two, and then drop two digits to return a 18 decimal
     // value.
 
-    return (sum + series_sum) / 100;
+    return (sum + series_sum) / I256::unchecked_from(100);
 }
 
 /**
@@ -346,7 +345,7 @@ pub fn exp(x_inp: I256) -> I256 {
 
     // We now transform x into a 20 decimal fixed point number, to have enhanced precision when computing the
     // smaller terms.
-    x *= 100;
+    x *= I256::unchecked_from(100);
 
     // `product` is the accumulated product of all a_n (except a0 and a1), which starts at 20 decimal fixed point
     // one. Recall that fixed point multiplication requires dividing by ONE_20.
@@ -400,37 +399,37 @@ pub fn exp(x_inp: I256) -> I256 {
     // Each term (x^n / n!) equals the previous one times x, divided by n. Since x is a fixed point number,
     // multiplying by it requires dividing by ONE_20, but dividing by the non-fixed point n values does not.
 
-    term = ((term * x) / one_20) / 2;
+    term = ((term * x) / one_20) / I256::unchecked_from(2);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 3;
+    term = ((term * x) / one_20) / I256::unchecked_from(3);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 4;
+    term = ((term * x) / one_20) / I256::unchecked_from(4);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 5;
+    term = ((term * x) / one_20) / I256::unchecked_from(5);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 6;
+    term = ((term * x) / one_20) / I256::unchecked_from(6);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 7;
+    term = ((term * x) / one_20) / I256::unchecked_from(7);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 8;
+    term = ((term * x) / one_20) / I256::unchecked_from(8);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 9;
+    term = ((term * x) / one_20) / I256::unchecked_from(9);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 10;
+    term = ((term * x) / one_20) / I256::unchecked_from(10);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 11;
+    term = ((term * x) / one_20) / I256::unchecked_from(11);
     series_sum += term;
 
-    term = ((term * x) / one_20) / 12;
+    term = ((term * x) / one_20) / I256::unchecked_from(12);
     series_sum += term;
 
     // 12 Taylor terms are sufficient for 18 decimal precision.
@@ -440,5 +439,5 @@ pub fn exp(x_inp: I256) -> I256 {
     // all three (one 20 decimal fixed point multiplication, dividing by ONE_20, and one integer multiplication),
     // and then drop two digits to return an 18 decimal value.
 
-    return (((product * series_sum) / one_20) * first_an) / 100;
+    return (((product * series_sum) / one_20) * first_an) / I256::unchecked_from(100);
 }
