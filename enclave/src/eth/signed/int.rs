@@ -51,10 +51,8 @@ use ruint::{BaseConvertError, Uint, UintTryFrom, UintTryTo};
 /// assert_eq!(I256::MINUS_ONE, I256::unchecked_from(-1));
 /// ```
 
-pub type I256 = Signed<256, 4>;
-
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(derive_arbitrary::Arbitrary, proptest_derive::Arbitrary))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary, proptest_derive::Arbitrary))]
 pub struct Signed<const BITS: usize, const LIMBS: usize>(pub(crate) Uint<BITS, LIMBS>);
 
 // formatting
@@ -533,5 +531,1190 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
         digits: I,
     ) -> Result<Self, BaseConvertError> {
         Ok(Self(Uint::from_base_be(base, digits)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eth::aliases::{I0, I1, I24, I56, I128, I160, I192, I256, U24, U192};
+    use crate::eth::signed::{BigIntConversionError, ParseSignedError};
+    use core::ops::Neg;
+    use ruint::{
+        BaseConvertError, ParseError,
+        aliases::{U0, U1, U128, U160, U256},
+    };
+
+    // type U2 = Uint<2, 1>;
+    type I96 = Signed<96, 2>;
+    type U96 = Uint<96, 2>;
+
+    #[test]
+    fn identities() {
+        macro_rules! test_identities {
+            ($signed:ty, $max:literal, $min:literal) => {
+                assert_eq!(<$signed>::ZERO.to_string(), "0");
+                assert_eq!(<$signed>::ONE.to_string(), "1");
+                assert_eq!(<$signed>::MINUS_ONE.to_string(), "-1");
+                assert_eq!(<$signed>::MAX.to_string(), $max);
+                assert_eq!(<$signed>::MIN.to_string(), $min);
+            };
+        }
+
+        assert_eq!(I0::ZERO.to_string(), "0");
+        assert_eq!(I1::ZERO.to_string(), "0");
+        assert_eq!(I1::ONE.to_string(), "-1");
+
+        test_identities!(I96, "39614081257132168796771975167", "-39614081257132168796771975168");
+        test_identities!(
+            I128,
+            "170141183460469231731687303715884105727",
+            "-170141183460469231731687303715884105728"
+        );
+        test_identities!(
+            I192,
+            "3138550867693340381917894711603833208051177722232017256447",
+            "-3138550867693340381917894711603833208051177722232017256448"
+        );
+        test_identities!(
+            I256,
+            "57896044618658097711785492504343953926634992332820282019728792003956564819967",
+            "-57896044618658097711785492504343953926634992332820282019728792003956564819968"
+        );
+    }
+
+    #[test]
+    fn std_num_conversion() {
+        // test conversion from basic types
+
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty, $i:ty, $u:ty) => {
+                // Test a specific number
+                assert_eq!(<$i_struct>::try_from(-42 as $i).unwrap().to_string(), "-42");
+                assert_eq!(<$i_struct>::try_from(42 as $i).unwrap().to_string(), "42");
+                assert_eq!(<$i_struct>::try_from(42 as $u).unwrap().to_string(), "42");
+
+                if <$u_struct>::BITS as u32 >= <$u>::BITS {
+                    assert_eq!(
+                        <$i_struct>::try_from(<$i>::MAX).unwrap().to_string(),
+                        <$i>::MAX.to_string(),
+                    );
+                    assert_eq!(
+                        <$i_struct>::try_from(<$i>::MIN).unwrap().to_string(),
+                        <$i>::MIN.to_string(),
+                    );
+                } else {
+                    assert_eq!(
+                        <$i_struct>::try_from(<$i>::MAX).unwrap_err(),
+                        BigIntConversionError,
+                    );
+                }
+            };
+
+            ($i_struct:ty, $u_struct:ty) => {
+                run_test!($i_struct, $u_struct, i8, u8);
+                run_test!($i_struct, $u_struct, i16, u16);
+                run_test!($i_struct, $u_struct, i32, u32);
+                run_test!($i_struct, $u_struct, i64, u64);
+                run_test!($i_struct, $u_struct, i128, u128);
+                run_test!($i_struct, $u_struct, isize, usize);
+            };
+        }
+
+        // edge cases
+        assert_eq!(I0::unchecked_from(0), I0::default());
+        assert_eq!(I0::try_from(1u8), Err(BigIntConversionError));
+        assert_eq!(I0::try_from(1i8), Err(BigIntConversionError));
+        assert_eq!(I1::unchecked_from(0), I1::default());
+        assert_eq!(I1::try_from(1u8), Err(BigIntConversionError));
+        assert_eq!(I1::try_from(1i8), Err(BigIntConversionError));
+        assert_eq!(I1::try_from(-1), Ok(I1::MINUS_ONE));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn from_dec_str() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let min_abs: $u_struct = <$i_struct>::MIN.0;
+                let unsigned = <$u_struct>::from_str_radix("3141592653589793", 10).unwrap();
+
+                let value = <$i_struct>::from_dec_str(&format!("-{unsigned}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Negative, unsigned));
+
+                let value = <$i_struct>::from_dec_str(&format!("{unsigned}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Positive, unsigned));
+
+                let value = <$i_struct>::from_dec_str(&format!("+{unsigned}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Positive, unsigned));
+
+                let err = <$i_struct>::from_dec_str("invalid string").unwrap_err();
+                assert_eq!(
+                    err,
+                    ParseSignedError::Ruint(ParseError::BaseConvertError(
+                        BaseConvertError::InvalidDigit(18, 10)
+                    ))
+                );
+
+                let err = <$i_struct>::from_dec_str(&format!("1{}", <$u_struct>::MAX)).unwrap_err();
+                assert_eq!(err, ParseSignedError::IntegerOverflow);
+
+                let err = <$i_struct>::from_dec_str(&format!("-{}", <$u_struct>::MAX)).unwrap_err();
+                assert_eq!(err, ParseSignedError::IntegerOverflow);
+
+                let value = <$i_struct>::from_dec_str(&format!("-{}", min_abs)).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Negative, min_abs));
+
+                let err = <$i_struct>::from_dec_str(&format!("{}", min_abs)).unwrap_err();
+                assert_eq!(err, ParseSignedError::IntegerOverflow);
+            };
+        }
+
+        assert_eq!(I0::from_dec_str("0"), Ok(I0::default()));
+        assert_eq!(I1::from_dec_str("0"), Ok(I1::ZERO));
+        assert_eq!(I1::from_dec_str("-1"), Ok(I1::MINUS_ONE));
+        assert_eq!(I1::from_dec_str("1"), Err(ParseSignedError::IntegerOverflow));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn from_hex_str() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let min_abs = <$i_struct>::MIN.0;
+                let unsigned = <$u_struct>::from_str_radix("3141592653589793", 10).unwrap();
+
+                let value = <$i_struct>::from_hex_str(&format!("-{unsigned:x}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Negative, unsigned));
+
+                let value = <$i_struct>::from_hex_str(&format!("-0x{unsigned:x}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Negative, unsigned));
+
+                let value = <$i_struct>::from_hex_str(&format!("{unsigned:x}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Positive, unsigned));
+
+                let value = <$i_struct>::from_hex_str(&format!("0x{unsigned:x}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Positive, unsigned));
+
+                let value = <$i_struct>::from_hex_str(&format!("+0x{unsigned:x}")).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Positive, unsigned));
+
+                let err = <$i_struct>::from_hex_str("invalid string").unwrap_err();
+                assert!(matches!(err, ParseSignedError::Ruint(_)));
+
+                let err =
+                    <$i_struct>::from_hex_str(&format!("1{:x}", <$u_struct>::MAX)).unwrap_err();
+                assert!(matches!(err, ParseSignedError::IntegerOverflow));
+
+                let err =
+                    <$i_struct>::from_hex_str(&format!("-{:x}", <$u_struct>::MAX)).unwrap_err();
+                assert!(matches!(err, ParseSignedError::IntegerOverflow));
+
+                let value = <$i_struct>::from_hex_str(&format!("-{:x}", min_abs)).unwrap();
+                assert_eq!(value.into_sign_and_abs(), (Sign::Negative, min_abs));
+
+                let err = <$i_struct>::from_hex_str(&format!("{:x}", min_abs)).unwrap_err();
+                assert!(matches!(err, ParseSignedError::IntegerOverflow));
+            };
+        }
+
+        assert_eq!(I0::from_hex_str("0x0"), Ok(I0::default()));
+        assert_eq!(I1::from_hex_str("0x0"), Ok(I1::ZERO));
+        assert_eq!(I1::from_hex_str("0x0"), Ok(I1::ZERO));
+        assert_eq!(I1::from_hex_str("-0x1"), Ok(I1::MINUS_ONE));
+        assert_eq!(I1::from_hex_str("0x1"), Err(ParseSignedError::IntegerOverflow));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn parse() {
+        assert_eq!("0x0".parse::<I0>(), Ok(I0::default()));
+        assert_eq!("+0x0".parse::<I0>(), Ok(I0::default()));
+        assert_eq!("0x0".parse::<I1>(), Ok(I1::ZERO));
+        assert_eq!("+0x0".parse::<I1>(), Ok(I1::ZERO));
+        assert_eq!("-0x1".parse::<I1>(), Ok(I1::MINUS_ONE));
+        assert_eq!("0x1".parse::<I1>(), Err(ParseSignedError::IntegerOverflow));
+
+        assert_eq!("0".parse::<I0>(), Ok(I0::default()));
+        assert_eq!("+0".parse::<I0>(), Ok(I0::default()));
+        assert_eq!("0".parse::<I1>(), Ok(I1::ZERO));
+        assert_eq!("+0".parse::<I1>(), Ok(I1::ZERO));
+        assert_eq!("-1".parse::<I1>(), Ok(I1::MINUS_ONE));
+        assert_eq!("1".parse::<I1>(), Err(ParseSignedError::IntegerOverflow));
+    }
+
+    #[test]
+    fn formatting() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let unsigned = <$u_struct>::from_str_radix("3141592653589793", 10).unwrap();
+                let unsigned_negative = -unsigned;
+                let positive = <$i_struct>::try_from(unsigned).unwrap();
+                let negative = -positive;
+
+                assert_eq!(format!("{positive}"), format!("{unsigned}"));
+                assert_eq!(format!("{negative}"), format!("-{unsigned}"));
+                assert_eq!(format!("{positive:+}"), format!("+{unsigned}"));
+                assert_eq!(format!("{negative:+}"), format!("-{unsigned}"));
+
+                assert_eq!(format!("{positive:x}"), format!("{unsigned:x}"));
+                assert_eq!(format!("{negative:x}"), format!("{unsigned_negative:x}"));
+                assert_eq!(format!("{positive:+x}"), format!("+{unsigned:x}"));
+                assert_eq!(format!("{negative:+x}"), format!("+{unsigned_negative:x}"));
+
+                assert_eq!(format!("{positive:X}"), format!("{unsigned:X}"));
+                assert_eq!(format!("{negative:X}"), format!("{unsigned_negative:X}"));
+                assert_eq!(format!("{positive:+X}"), format!("+{unsigned:X}"));
+                assert_eq!(format!("{negative:+X}"), format!("+{unsigned_negative:X}"));
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(format!("{z} {o} {m}"), "0 0 -1");
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn signs() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(<$i_struct>::MAX.sign(), Sign::Positive);
+                assert!(<$i_struct>::MAX.is_positive());
+                assert!(!<$i_struct>::MAX.is_negative());
+                assert!(!<$i_struct>::MAX.is_zero());
+
+                assert_eq!(<$i_struct>::ONE.sign(), Sign::Positive);
+                assert!(<$i_struct>::ONE.is_positive());
+                assert!(!<$i_struct>::ONE.is_negative());
+                assert!(!<$i_struct>::ONE.is_zero());
+
+                assert_eq!(<$i_struct>::MIN.sign(), Sign::Negative);
+                assert!(!<$i_struct>::MIN.is_positive());
+                assert!(<$i_struct>::MIN.is_negative());
+                assert!(!<$i_struct>::MIN.is_zero());
+
+                assert_eq!(<$i_struct>::MINUS_ONE.sign(), Sign::Negative);
+                assert!(!<$i_struct>::MINUS_ONE.is_positive());
+                assert!(<$i_struct>::MINUS_ONE.is_negative());
+                assert!(!<$i_struct>::MINUS_ONE.is_zero());
+
+                assert_eq!(<$i_struct>::ZERO.sign(), Sign::Positive);
+                assert!(!<$i_struct>::ZERO.is_positive());
+                assert!(!<$i_struct>::ZERO.is_negative());
+                assert!(<$i_struct>::ZERO.is_zero());
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.sign(), Sign::Positive);
+        assert_eq!(o.sign(), Sign::Positive);
+        assert_eq!(m.sign(), Sign::Negative);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn abs() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let positive = <$i_struct>::from_dec_str("3141592653589793").unwrap();
+                let negative = <$i_struct>::from_dec_str("-27182818284590").unwrap();
+
+                assert_eq!(positive.sign(), Sign::Positive);
+                assert_eq!(positive.abs().sign(), Sign::Positive);
+                assert_eq!(positive, positive.abs());
+                assert_ne!(negative, negative.abs());
+                assert_eq!(negative.sign(), Sign::Negative);
+                assert_eq!(negative.abs().sign(), Sign::Positive);
+                assert_eq!(<$i_struct>::ZERO.abs(), <$i_struct>::ZERO);
+                assert_eq!(<$i_struct>::MAX.abs(), <$i_struct>::MAX);
+                assert_eq!((-<$i_struct>::MAX).abs(), <$i_struct>::MAX);
+                assert_eq!(<$i_struct>::MIN.checked_abs(), None);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.abs(), z);
+        assert_eq!(o.abs(), o);
+        assert_eq!(m.checked_abs(), None);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn neg() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let positive = <$i_struct>::from_dec_str("3141592653589793").unwrap().sign();
+                let negative = -positive;
+
+                assert_eq!(-positive, negative);
+                assert_eq!(-negative, positive);
+
+                assert_eq!(-<$i_struct>::ZERO, <$i_struct>::ZERO);
+                assert_eq!(-(-<$i_struct>::MAX), <$i_struct>::MAX);
+                assert_eq!(<$i_struct>::MIN.checked_neg(), None);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(-z, z);
+        assert_eq!(-o, o);
+        assert_eq!(m.checked_neg(), None);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn bits() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(<$i_struct>::try_from(0b1000).unwrap().bits(), 5);
+                assert_eq!(<$i_struct>::try_from(-0b1000).unwrap().bits(), 4);
+
+                assert_eq!(<$i_struct>::try_from(i64::MAX).unwrap().bits(), 64);
+                assert_eq!(<$i_struct>::try_from(i64::MIN).unwrap().bits(), 64);
+
+                assert_eq!(<$i_struct>::MAX.bits(), <$i_struct>::BITS as u32);
+                assert_eq!(<$i_struct>::MIN.bits(), <$i_struct>::BITS as u32);
+
+                assert_eq!(<$i_struct>::ZERO.bits(), 0);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.bits(), 0);
+        assert_eq!(o.bits(), 0);
+        assert_eq!(m.bits(), 1);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn bit_shift() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(<$i_struct>::ONE << <$i_struct>::BITS - 1, <$i_struct>::MIN);
+                assert_eq!(<$i_struct>::MIN >> <$i_struct>::BITS - 1, <$i_struct>::ONE);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z << 1, z >> 1);
+        assert_eq!(o << 1, o >> 0);
+        assert_eq!(m << 1, o);
+        assert_eq!(m >> 1, o);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn arithmetic_shift_right() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let exp = <$i_struct>::BITS - 2;
+                let shift = <$i_struct>::BITS - 3;
+
+                let value =
+                    <$i_struct>::from_raw(<$u_struct>::from(2u8).pow(<$u_struct>::from(exp))).neg();
+
+                let expected_result =
+                    <$i_struct>::from_raw(<$u_struct>::MAX - <$u_struct>::from(1u8));
+                assert_eq!(
+                    value.asr(shift),
+                    expected_result,
+                    "1011...1111 >> 253 was not 1111...1110"
+                );
+
+                let value = <$i_struct>::MINUS_ONE;
+                let expected_result = <$i_struct>::MINUS_ONE;
+                assert_eq!(value.asr(250), expected_result, "-1 >> any_amount was not -1");
+
+                let value = <$i_struct>::from_raw(
+                    <$u_struct>::from(2u8).pow(<$u_struct>::from(<$i_struct>::BITS - 2)),
+                )
+                .neg();
+                let expected_result = <$i_struct>::MINUS_ONE;
+                assert_eq!(
+                    value.asr(<$i_struct>::BITS - 1),
+                    expected_result,
+                    "1011...1111 >> 255 was not -1"
+                );
+
+                let value = <$i_struct>::from_raw(
+                    <$u_struct>::from(2u8).pow(<$u_struct>::from(<$i_struct>::BITS - 2)),
+                )
+                .neg();
+                let expected_result = <$i_struct>::MINUS_ONE;
+                assert_eq!(value.asr(1024), expected_result, "1011...1111 >> 1024 was not -1");
+
+                let value = <$i_struct>::try_from(1024i32).unwrap();
+                let expected_result = <$i_struct>::try_from(32i32).unwrap();
+                assert_eq!(value.asr(5), expected_result, "1024 >> 5 was not 32");
+
+                let value = <$i_struct>::MAX;
+                let expected_result = <$i_struct>::ZERO;
+                assert_eq!(value.asr(255), expected_result, "<$i_struct>::MAX >> 255 was not 0");
+
+                let value =
+                    <$i_struct>::from_raw(<$u_struct>::from(2u8).pow(<$u_struct>::from(exp))).neg();
+                let expected_result = value;
+                assert_eq!(value.asr(0), expected_result, "1011...1111 >> 0 was not 1011...111");
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.asr(1), z);
+        assert_eq!(o.asr(1), o);
+        assert_eq!(m.asr(1), m);
+        assert_eq!(m.asr(1000), m);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn arithmetic_shift_left() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let value = <$i_struct>::MINUS_ONE;
+                let expected_result = Some(value);
+                assert_eq!(value.asl(0), expected_result, "-1 << 0 was not -1");
+
+                let value = <$i_struct>::MINUS_ONE;
+                let expected_result = None;
+                assert_eq!(
+                    value.asl(256),
+                    expected_result,
+                    "-1 << 256 did not overflow (result should be 0000...0000)"
+                );
+
+                let value = <$i_struct>::MINUS_ONE;
+                let expected_result = Some(<$i_struct>::from_raw(
+                    <$u_struct>::from(2u8).pow(<$u_struct>::from(<$i_struct>::BITS - 1)),
+                ));
+                assert_eq!(
+                    value.asl(<$i_struct>::BITS - 1),
+                    expected_result,
+                    "-1 << 255 was not 1000...0000"
+                );
+
+                let value = <$i_struct>::try_from(-1024i32).unwrap();
+                let expected_result = Some(<$i_struct>::try_from(-32768i32).unwrap());
+                assert_eq!(value.asl(5), expected_result, "-1024 << 5 was not -32768");
+
+                let value = <$i_struct>::try_from(1024i32).unwrap();
+                let expected_result = Some(<$i_struct>::try_from(32768i32).unwrap());
+                assert_eq!(value.asl(5), expected_result, "1024 << 5 was not 32768");
+
+                let value = <$i_struct>::try_from(1024i32).unwrap();
+                let expected_result = None;
+                assert_eq!(
+                    value.asl(<$i_struct>::BITS - 11),
+                    expected_result,
+                    "1024 << 245 did not overflow (result should be 1000...0000)"
+                );
+
+                let value = <$i_struct>::ZERO;
+                let expected_result = Some(value);
+                assert_eq!(value.asl(1024), expected_result, "0 << anything was not 0");
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.asl(1), Some(z));
+        assert_eq!(o.asl(1), Some(o));
+        assert_eq!(m.asl(1), None);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn addition() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_add(<$i_struct>::MIN),
+                    (<$i_struct>::ZERO, true)
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.overflowing_add(<$i_struct>::MAX),
+                    (<$i_struct>::try_from(-2).unwrap(), true)
+                );
+
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_add(<$i_struct>::MINUS_ONE),
+                    (<$i_struct>::MAX, true)
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.overflowing_add(<$i_struct>::ONE),
+                    (<$i_struct>::MIN, true)
+                );
+
+                assert_eq!(<$i_struct>::MAX + <$i_struct>::MIN, <$i_struct>::MINUS_ONE);
+                assert_eq!(
+                    <$i_struct>::try_from(2).unwrap() + <$i_struct>::try_from(40).unwrap(),
+                    <$i_struct>::try_from(42).unwrap()
+                );
+
+                assert_eq!(<$i_struct>::ZERO + <$i_struct>::ZERO, <$i_struct>::ZERO);
+
+                assert_eq!(<$i_struct>::MAX.saturating_add(<$i_struct>::MAX), <$i_struct>::MAX);
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_add(<$i_struct>::MINUS_ONE),
+                    <$i_struct>::MIN
+                );
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z + z, z);
+        assert_eq!(o + o, o);
+        assert_eq!(m + o, m);
+        assert_eq!(m.overflowing_add(m), (o, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn subtraction() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_sub(<$i_struct>::MAX),
+                    (<$i_struct>::ONE, true)
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.overflowing_sub(<$i_struct>::MIN),
+                    (<$i_struct>::MINUS_ONE, true)
+                );
+
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_sub(<$i_struct>::ONE),
+                    (<$i_struct>::MAX, true)
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.overflowing_sub(<$i_struct>::MINUS_ONE),
+                    (<$i_struct>::MIN, true)
+                );
+
+                assert_eq!(
+                    <$i_struct>::ZERO.overflowing_sub(<$i_struct>::MIN),
+                    (<$i_struct>::MIN, true)
+                );
+
+                assert_eq!(<$i_struct>::MAX - <$i_struct>::MAX, <$i_struct>::ZERO);
+                assert_eq!(
+                    <$i_struct>::try_from(2).unwrap() - <$i_struct>::try_from(44).unwrap(),
+                    <$i_struct>::try_from(-42).unwrap()
+                );
+
+                assert_eq!(<$i_struct>::ZERO - <$i_struct>::ZERO, <$i_struct>::ZERO);
+
+                assert_eq!(<$i_struct>::MAX.saturating_sub(<$i_struct>::MIN), <$i_struct>::MAX);
+                assert_eq!(<$i_struct>::MIN.saturating_sub(<$i_struct>::ONE), <$i_struct>::MIN);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z - z, z);
+        assert_eq!(o - o, o);
+        assert_eq!(m - o, m);
+        assert_eq!(m - m, o);
+        assert_eq!(o.overflowing_sub(m), (m, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn multiplication() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_mul(<$i_struct>::MAX),
+                    (<$i_struct>::MIN, true)
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.overflowing_mul(<$i_struct>::MIN),
+                    (<$i_struct>::MIN, true)
+                );
+
+                assert_eq!(<$i_struct>::MIN * <$i_struct>::ONE, <$i_struct>::MIN);
+                assert_eq!(
+                    <$i_struct>::try_from(2).unwrap() * <$i_struct>::try_from(-21).unwrap(),
+                    <$i_struct>::try_from(-42).unwrap()
+                );
+
+                assert_eq!(<$i_struct>::MAX.saturating_mul(<$i_struct>::MAX), <$i_struct>::MAX);
+                assert_eq!(
+                    <$i_struct>::MAX.saturating_mul(<$i_struct>::try_from(2).unwrap()),
+                    <$i_struct>::MAX
+                );
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_mul(<$i_struct>::try_from(-2).unwrap()),
+                    <$i_struct>::MAX
+                );
+
+                assert_eq!(<$i_struct>::MIN.saturating_mul(<$i_struct>::MAX), <$i_struct>::MIN);
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_mul(<$i_struct>::try_from(2).unwrap()),
+                    <$i_struct>::MIN
+                );
+                assert_eq!(
+                    <$i_struct>::MAX.saturating_mul(<$i_struct>::try_from(-2).unwrap()),
+                    <$i_struct>::MIN
+                );
+
+                assert_eq!(<$i_struct>::ZERO * <$i_struct>::ZERO, <$i_struct>::ZERO);
+                assert_eq!(<$i_struct>::ONE * <$i_struct>::ZERO, <$i_struct>::ZERO);
+                assert_eq!(<$i_struct>::MAX * <$i_struct>::ZERO, <$i_struct>::ZERO);
+                assert_eq!(<$i_struct>::MIN * <$i_struct>::ZERO, <$i_struct>::ZERO);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z * z, z);
+        assert_eq!(o * o, o);
+        assert_eq!(m * o, o);
+        assert_eq!(m.overflowing_mul(m), (m, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn division() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                // The only case for overflow.
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_div(<$i_struct>::try_from(-1).unwrap()),
+                    (<$i_struct>::MIN, true)
+                );
+
+                assert_eq!(<$i_struct>::MIN / <$i_struct>::MAX, <$i_struct>::try_from(-1).unwrap());
+                assert_eq!(<$i_struct>::MAX / <$i_struct>::MIN, <$i_struct>::ZERO);
+
+                assert_eq!(<$i_struct>::MIN / <$i_struct>::ONE, <$i_struct>::MIN);
+                assert_eq!(
+                    <$i_struct>::try_from(-42).unwrap() / <$i_struct>::try_from(-21).unwrap(),
+                    <$i_struct>::try_from(2).unwrap()
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(-42).unwrap() / <$i_struct>::try_from(2).unwrap(),
+                    <$i_struct>::try_from(-21).unwrap()
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(42).unwrap() / <$i_struct>::try_from(-21).unwrap(),
+                    <$i_struct>::try_from(-2).unwrap()
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(42).unwrap() / <$i_struct>::try_from(21).unwrap(),
+                    <$i_struct>::try_from(2).unwrap()
+                );
+
+                // The only saturating corner case.
+                assert_eq!(
+                    <$i_struct>::MIN.saturating_div(<$i_struct>::try_from(-1).unwrap()),
+                    <$i_struct>::MAX
+                );
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.checked_div(z), None);
+        assert_eq!(o.checked_div(o), None);
+        assert_eq!(m.checked_div(o), None);
+        assert_eq!(m.overflowing_div(m), (m, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn division_by_zero() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let err = std::panic::catch_unwind(|| {
+                    let _ = <$i_struct>::ONE / <$i_struct>::ZERO;
+                });
+                assert!(err.is_err());
+            };
+        }
+
+        run_test!(I0, U0);
+        run_test!(I1, U1);
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn div_euclid() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let a = <$i_struct>::try_from(7).unwrap();
+                let b = <$i_struct>::try_from(4).unwrap();
+
+                assert_eq!(a.div_euclid(b), <$i_struct>::ONE); // 7 >= 4 * 1
+                assert_eq!(a.div_euclid(-b), <$i_struct>::MINUS_ONE); // 7 >= -4 * -1
+                assert_eq!((-a).div_euclid(b), -<$i_struct>::try_from(2).unwrap()); // -7 >= 4 * -2
+                assert_eq!((-a).div_euclid(-b), <$i_struct>::try_from(2).unwrap()); // -7 >= -4 * 2
+
+                // Overflowing
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_div_euclid(<$i_struct>::MINUS_ONE),
+                    (<$i_struct>::MIN, true)
+                );
+                // Wrapping
+                assert_eq!(
+                    <$i_struct>::MIN.wrapping_div_euclid(<$i_struct>::MINUS_ONE),
+                    <$i_struct>::MIN
+                );
+                // // Checked
+                assert_eq!(<$i_struct>::MIN.checked_div_euclid(<$i_struct>::MINUS_ONE), None);
+                assert_eq!(<$i_struct>::ONE.checked_div_euclid(<$i_struct>::ZERO), None);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.checked_div_euclid(z), None);
+        assert_eq!(o.checked_div_euclid(o), None);
+        assert_eq!(m.checked_div_euclid(o), None);
+        assert_eq!(m.overflowing_div_euclid(m), (m, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn rem_euclid() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let a = <$i_struct>::try_from(7).unwrap(); // or any other integer type
+                let b = <$i_struct>::try_from(4).unwrap();
+
+                assert_eq!(a.rem_euclid(b), <$i_struct>::try_from(3).unwrap());
+                assert_eq!((-a).rem_euclid(b), <$i_struct>::ONE);
+                assert_eq!(a.rem_euclid(-b), <$i_struct>::try_from(3).unwrap());
+                assert_eq!((-a).rem_euclid(-b), <$i_struct>::ONE);
+
+                // Overflowing
+                assert_eq!(a.overflowing_rem_euclid(b), (<$i_struct>::try_from(3).unwrap(), false));
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_rem_euclid(<$i_struct>::MINUS_ONE),
+                    (<$i_struct>::ZERO, true)
+                );
+
+                // Wrapping
+                assert_eq!(
+                    <$i_struct>::try_from(100)
+                        .unwrap()
+                        .wrapping_rem_euclid(<$i_struct>::try_from(10).unwrap()),
+                    <$i_struct>::ZERO
+                );
+                assert_eq!(
+                    <$i_struct>::MIN.wrapping_rem_euclid(<$i_struct>::MINUS_ONE),
+                    <$i_struct>::ZERO
+                );
+
+                // Checked
+                assert_eq!(a.checked_rem_euclid(b), Some(<$i_struct>::try_from(3).unwrap()));
+                assert_eq!(a.checked_rem_euclid(<$i_struct>::ZERO), None);
+                assert_eq!(<$i_struct>::MIN.checked_rem_euclid(<$i_struct>::MINUS_ONE), None);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.checked_rem_euclid(z), None);
+        assert_eq!(o.checked_rem_euclid(o), None);
+        assert_eq!(m.checked_rem_euclid(o), None);
+        assert_eq!(m.overflowing_rem_euclid(m), (o, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn div_euclid_by_zero() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let err = std::panic::catch_unwind(|| {
+                    let _ = <$i_struct>::ONE.div_euclid(<$i_struct>::ZERO);
+                });
+                assert!(err.is_err());
+
+                let err = std::panic::catch_unwind(|| {
+                    assert_eq!(
+                        <$i_struct>::MIN.div_euclid(<$i_struct>::MINUS_ONE),
+                        <$i_struct>::MAX
+                    );
+                });
+                assert!(err.is_err());
+            };
+        }
+
+        run_test!(I0, U0);
+        run_test!(I1, U1);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn div_euclid_overflow() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let err = std::panic::catch_unwind(|| {
+                    let _ = <$i_struct>::MIN.div_euclid(<$i_struct>::MINUS_ONE);
+                });
+                assert!(err.is_err());
+            };
+        }
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn mod_by_zero() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                let err = std::panic::catch_unwind(|| {
+                    let _ = <$i_struct>::ONE % <$i_struct>::ZERO;
+                });
+                assert!(err.is_err());
+            };
+        }
+
+        run_test!(I0, U0);
+        run_test!(I1, U1);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn remainder() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                // The only case for overflow.
+                assert_eq!(
+                    <$i_struct>::MIN.overflowing_rem(<$i_struct>::try_from(-1).unwrap()),
+                    (<$i_struct>::ZERO, true)
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(-5).unwrap() % <$i_struct>::try_from(-2).unwrap(),
+                    <$i_struct>::try_from(-1).unwrap()
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(5).unwrap() % <$i_struct>::try_from(-2).unwrap(),
+                    <$i_struct>::ONE
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(-5).unwrap() % <$i_struct>::try_from(2).unwrap(),
+                    <$i_struct>::try_from(-1).unwrap()
+                );
+                assert_eq!(
+                    <$i_struct>::try_from(5).unwrap() % <$i_struct>::try_from(2).unwrap(),
+                    <$i_struct>::ONE
+                );
+
+                assert_eq!(<$i_struct>::MIN.checked_rem(<$i_struct>::try_from(-1).unwrap()), None);
+                assert_eq!(<$i_struct>::ONE.checked_rem(<$i_struct>::ONE), Some(<$i_struct>::ZERO));
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.checked_rem(z), None);
+        assert_eq!(o.checked_rem(o), None);
+        assert_eq!(m.checked_rem(o), None);
+        assert_eq!(m.overflowing_rem(m), (o, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn exponentiation() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(
+                    <$i_struct>::unchecked_from(1000).saturating_pow(<$u_struct>::from(1000)),
+                    <$i_struct>::MAX
+                );
+                assert_eq!(
+                    <$i_struct>::unchecked_from(-1000).saturating_pow(<$u_struct>::from(1001)),
+                    <$i_struct>::MIN
+                );
+
+                assert_eq!(
+                    <$i_struct>::unchecked_from(2).pow(<$u_struct>::from(64)),
+                    <$i_struct>::unchecked_from(1u128 << 64)
+                );
+                assert_eq!(
+                    <$i_struct>::unchecked_from(-2).pow(<$u_struct>::from(63)),
+                    <$i_struct>::unchecked_from(i64::MIN)
+                );
+
+                assert_eq!(<$i_struct>::ZERO.pow(<$u_struct>::from(42)), <$i_struct>::ZERO);
+                assert_eq!(<$i_struct>::exp10(18).to_string(), "1000000000000000000");
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.pow(U0::default()), z);
+        assert_eq!(o.overflowing_pow(U1::default()), (m, true));
+        assert_eq!(o.overflowing_pow(U1::from(1u8)), (o, false));
+        assert_eq!(m.overflowing_pow(U1::from(1u8)), (m, false));
+        assert_eq!(m.overflowing_pow(U1::default()), (m, true));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn iterators() {
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_eq!(
+                    (1..=5).map(<$i_struct>::try_from).map(Result::unwrap).sum::<$i_struct>(),
+                    <$i_struct>::try_from(15).unwrap()
+                );
+                assert_eq!(
+                    (1..=5).map(<$i_struct>::try_from).map(Result::unwrap).product::<$i_struct>(),
+                    <$i_struct>::try_from(120).unwrap()
+                );
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!([z; 0].into_iter().sum::<I0>(), z);
+        assert_eq!([o; 1].into_iter().sum::<I1>(), o);
+        assert_eq!([m; 1].into_iter().sum::<I1>(), m);
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn twos_complement() {
+        macro_rules! assert_twos_complement {
+            ($i_struct:ty, $u_struct:ty, $signed:ty, $unsigned:ty) => {
+                if <$u_struct>::BITS as u32 >= <$unsigned>::BITS {
+                    assert_eq!(
+                        <$i_struct>::try_from(<$signed>::MAX).unwrap().twos_complement(),
+                        <$u_struct>::try_from(<$signed>::MAX).unwrap()
+                    );
+                    assert_eq!(
+                        <$i_struct>::try_from(<$signed>::MIN).unwrap().twos_complement(),
+                        <$u_struct>::try_from(<$signed>::MIN.unsigned_abs()).unwrap()
+                    );
+                }
+
+                assert_eq!(
+                    <$i_struct>::try_from(0 as $signed).unwrap().twos_complement(),
+                    <$u_struct>::try_from(0 as $signed).unwrap()
+                );
+
+                assert_eq!(
+                    <$i_struct>::try_from(0 as $unsigned).unwrap().twos_complement(),
+                    <$u_struct>::try_from(0 as $unsigned).unwrap()
+                );
+            };
+        }
+        macro_rules! run_test {
+            ($i_struct:ty, $u_struct:ty) => {
+                assert_twos_complement!($i_struct, $u_struct, i8, u8);
+                assert_twos_complement!($i_struct, $u_struct, i16, u16);
+                assert_twos_complement!($i_struct, $u_struct, i32, u32);
+                assert_twos_complement!($i_struct, $u_struct, i64, u64);
+                assert_twos_complement!($i_struct, $u_struct, i128, u128);
+                assert_twos_complement!($i_struct, $u_struct, isize, usize);
+            };
+        }
+
+        let z = I0::default();
+        let o = I1::default();
+        let m = I1::MINUS_ONE;
+        assert_eq!(z.twos_complement(), U0::default());
+        assert_eq!(o.twos_complement(), U1::default());
+        assert_eq!(m.twos_complement(), U1::from(1));
+
+        run_test!(I96, U96);
+        run_test!(I128, U128);
+        run_test!(I160, U160);
+        run_test!(I192, U192);
+        run_test!(I256, U256);
+    }
+
+    #[test]
+    fn test_overflowing_from_sign_and_abs() {
+        let a = Uint::<8, 1>::ZERO;
+        let (_, overflow) = Signed::overflowing_from_sign_and_abs(Sign::Negative, a);
+        assert!(!overflow);
+
+        let a = Uint::<8, 1>::from(128u8);
+        let (_, overflow) = Signed::overflowing_from_sign_and_abs(Sign::Negative, a);
+        assert!(!overflow);
+
+        let a = Uint::<8, 1>::from(129u8);
+        let (_, overflow) = Signed::overflowing_from_sign_and_abs(Sign::Negative, a);
+        assert!(overflow);
+    }
+
+    #[test]
+    fn test_int_conversion() {
+        // can convert between signed of different sizes when value is within bounds
+        let m_i256 = I256::unchecked_from(-4);
+        let m_i24 = I24::from(m_i256);
+        assert_eq!(m_i24, I24::from_dec_str("-4").unwrap());
+        let m_i56 = I56::from(m_i24);
+        assert_eq!(m_i56, I56::from_dec_str("-4").unwrap());
+        let m_i128 = I128::from(m_i56);
+        assert_eq!(m_i128, I128::from_dec_str("-4").unwrap());
+        let m_i96 = I96::from(m_i128);
+        assert_eq!(m_i96, I96::from_dec_str("-4").unwrap());
+
+        // convert positive signed to unsigned
+        assert_eq!(U24::from(I24::from_hex_str("0x7FFFFF").unwrap()), U24::from(0x7FFFFF));
+
+        // convert unsigned to positive signed
+        assert_eq!(I24::from(U24::from(0x7FFFFF)), I24::from_hex_str("0x7FFFFF").unwrap());
+        assert_eq!(I24::from(U96::from(0x7FFFFF)), I24::from_hex_str("0x7FFFFF").unwrap());
+
+        // can't convert negative signed to unsigned
+        assert!(U24::uint_try_from(m_i24).is_err());
+
+        // can't convert unsigned to positive signed if too large
+        assert!(I24::uint_try_from(U24::from(0x800000)).is_err());
+
+        // out-of-bounds conversions
+        assert!(I24::uint_try_from(I128::MIN).is_err());
+        assert!(I24::uint_try_from(I128::MAX).is_err());
     }
 }

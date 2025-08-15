@@ -3,7 +3,7 @@ use core::ops::{Add, Sub, Mul, Div};
 
 use std::str::FromStr;
 
-use crate::eth::signed::int::I256;
+use crate::eth::aliases::I256;
 
 use hex::FromHexError;
 use rlp::{Encodable, RlpStream};
