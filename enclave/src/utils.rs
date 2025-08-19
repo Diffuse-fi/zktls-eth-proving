@@ -29,6 +29,41 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     res
 }
 
+pub(crate) fn rlp_encode_list(items_payload: Vec<u8>) -> Vec<u8> {
+    let payload_len = items_payload.len();
+    let mut rlp_encoded_list: Vec<u8> = Vec::new();
+
+    if payload_len < 56 {
+        rlp_encoded_list.push(0xc0 + payload_len as u8);
+    } else {
+        let mut len_bytes_temp = Vec::new();
+        if payload_len <= 0xFF {
+            len_bytes_temp.push(payload_len as u8);
+        } else if payload_len <= 0xFFFF {
+            len_bytes_temp.extend_from_slice(&(payload_len as u16).to_be_bytes());
+        } else if payload_len <= 0xFF_FFFF {
+            let u32_val = payload_len as u32;
+            len_bytes_temp.extend_from_slice(&u32_val.to_be_bytes()[1..]);
+        } else if payload_len <= 0xFFFF_FFFF {
+            len_bytes_temp.extend_from_slice(&(payload_len as u32).to_be_bytes());
+        } else {
+            let u64_val = payload_len as u64;
+            let all_bytes = u64_val.to_be_bytes();
+            let first_nz = all_bytes
+                .iter()
+                .position(|&b| b != 0)
+                .unwrap_or(all_bytes.len() - 1);
+            len_bytes_temp.extend_from_slice(&all_bytes[first_nz..]);
+        }
+
+        rlp_encoded_list.push(0xf7 + len_bytes_temp.len() as u8);
+        rlp_encoded_list.extend_from_slice(&len_bytes_temp);
+    }
+    rlp_encoded_list.extend(items_payload);
+    rlp_encoded_list
+}
+
+
 #[derive(Clone)]
 pub struct StorageProvingConfig {
     pub(crate) rpc_url: String,

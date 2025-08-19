@@ -2,6 +2,7 @@ mod market_math_core;
 
 use crate::utils;
 use crate::eth;
+use rlp::encode;
 
 use std::collections::HashMap;
 
@@ -10,9 +11,10 @@ use crate::{
         aliases::I256,
         primitives::{Address, B256, U256},
     },
-    timing::Timings,
+    timing::{Lap, Timings},
     utils::{
         extract_storage_slots_with_merkle_proving,
+        keccak256, rlp_encode_list,
         make_http_request,
         RpcResponse,
         StorageProvingConfig,
@@ -151,7 +153,37 @@ pub struct PendleOutput {
     scalar_root: I256,
     expiry: U256,
     ln_fee_rate_root: U256,
+    block_timestamp: u64,
+    block_number: u64,
+    block_hash: B256,
 }
+
+
+impl PendleOutput {
+    pub fn hash(&self) -> B256 {
+        let mut rlp_items_concatenated: Vec<u8> = Vec::new();
+
+        let append_encoded_item = |buffer: &mut Vec<u8>, item_rlp: bytes::BytesMut| {
+            buffer.extend_from_slice(&item_rlp);
+        };
+
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.exact_pt_in));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.exact_sy_out));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.yt_address));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.yt_index));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.scalar_root));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.expiry));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.ln_fee_rate_root));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.block_timestamp));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.block_number));
+        append_encoded_item(&mut rlp_items_concatenated, encode(&self.block_hash));
+
+        let final_rlp_full_header = rlp_encode_list(rlp_items_concatenated);
+        let calculated_hash = keccak256(&final_rlp_full_header);
+        calculated_hash.into()
+    }
+}
+
 
 pub fn pendle_logic(
     storage_proving_config: &utils::StorageProvingConfig,
@@ -159,6 +191,8 @@ pub fn pendle_logic(
     total_timer_start: std::time::Instant,
 ) -> anyhow::Result<PendleOutput> {
 
+
+    let maket_data_extraction_from_storage_timing = Lap::new("maket_data_extraction_from_storage_timing");
     let market_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
@@ -214,14 +248,16 @@ pub fn pendle_logic(
     ln_rate_bytes[4..16].copy_from_slice(&raw_slot_11[32-12..32]);
     let ln_rate_from_storage: u128 = u128::from_be_bytes(ln_rate_bytes);
     tracing::debug!("ln_rate_from_storage = {}", ln_rate_from_storage);
+    maket_data_extraction_from_storage_timing.stop(timings);
 
-
+    let immutables_request_timing = Lap::new("immutables_request_timing");
     let immutables = get_immutables_from_market_state(market_storage_proving_config.clone())
         .map_err(|e| anyhow::anyhow!("Immutables request failed: {:?}", e))?;
 
     let scalar_root_from_storage = immutables.scalar_root_from_storage;
     let expiry_from_storage = immutables.expiry_from_storage;
     let ln_fee_rate_root_from_storage = immutables.ln_fee_rate_root_from_storage;
+    immutables_request_timing.stop(timings);
 
 
     // in solidity market is constructed in PendleParketV3.readState,
@@ -236,19 +272,23 @@ pub fn pendle_logic(
         last_ln_implied_rate: U256::new(ln_rate_from_storage),
     };
 
+    let yt_request_timing = Lap::new("yt_request_timing");
     let yt_address_and_index = get_yt_index(market_storage_proving_config)
         .map_err(|e| anyhow::anyhow!("YT.newIndex() request failed: {:?}", e))?;
+    yt_request_timing.stop(timings);
 
 
     let billion: U256 = U256::from_limbs([1_000_000_000, 0, 0, 0]); // TODO pass as cmd line arg or smth like that
     let exact_pt_in = billion * billion * U256::from_limbs([10_000_000, 0, 0, 0]);
 
+    let solidity_logic_execution_timing = Lap::new("solidity_logic_execution_timing");
     let exact_sy_out = market_math_core::swap_exact_pt_for_sy(
         market,
         yt_address_and_index.py_index_current,
         exact_pt_in,
         block_timestamp,
     );
+    solidity_logic_execution_timing.stop(timings);
 
     tracing::info! ("storage_proving_config.block_number: {}", storage_proving_config.block_number);
     tracing::info! ("exact_pt_in: {}", exact_pt_in);
@@ -264,6 +304,9 @@ pub fn pendle_logic(
         scalar_root: immutables.scalar_root_from_storage,
         expiry: immutables.expiry_from_storage,
         ln_fee_rate_root: immutables.ln_fee_rate_root_from_storage,
+        block_timestamp: market_storage_storage_slots.block_timestamp,
+        block_number: market_storage_storage_slots.block_number,
+        block_hash: market_storage_storage_slots.block_hash,
     };
 
     Ok(output)

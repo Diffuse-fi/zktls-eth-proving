@@ -210,3 +210,19 @@ impl B256 {
         B256::from([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,value])
     }
 }
+
+impl Encodable for I256 {
+    fn rlp_append(&self, s: &mut RlpStream) {
+        if self.0.is_zero() {
+            s.append_empty_data();
+        } else {
+            let be_bytes = self.0.to_be_bytes::<32>();
+            if let Some(first_nz_idx) = be_bytes.iter().position(|&b| b != 0) {
+                let data_slice: &[u8] = &be_bytes[first_nz_idx..];
+                s.append(&data_slice);
+            } else {
+                s.append_empty_data();
+            }
+        }
+    }
+}

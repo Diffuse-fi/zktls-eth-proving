@@ -7,11 +7,10 @@ mod trie;
 mod uniswap3;
 mod utils;
 
-use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
+use std::str::FromStr;
 
 use automata_sgx_sdk::types::SgxStatus;
-use clap::{Parser, ErrorKind};
-// use clap::Parser;
+use clap::Parser;
 
 pub use pendle::{
     pendle_logic
@@ -25,18 +24,11 @@ pub use uniswap3::{
 };
 
 use crate::{
-    attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
-    eth::{
-        block::Block,
-        header::Header,
-        primitives::{Address, B256},
-        proof::ProofResponse,
-    },
+    eth::primitives::B256,
     timing::{Lap, Timings},
-    trie::verify_proof,
     utils::{
-        construct_report_data, get_semantic_u256_bytes, keccak256, parse_slots_to_prove,
-        RpcResponse, StorageProvingConfig
+        parse_slots_to_prove,
+        StorageProvingConfig
     },
 };
 
@@ -48,12 +40,6 @@ use crate::{
 struct TimingDebugOutput {
     error: String,
     timings: Timings,
-}
-
-struct CliParams {
-    rpc_url: String,
-    address: String,
-    block_number: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -178,25 +164,57 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     let storage_proving_config = match ZkTlsProverCli::get_storage_proving_config(&cli) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{}", e); // TODO tracing::warn!
+            tracing::warn! ("Error occured during storage proving config extraction: {}", e);
             return SgxStatus::InvalidParameter;
         }
     };
 
     let total_timer_start = std::time::Instant::now();
     let mut timings = Timings::default();
+    tracing::info!(config = ?cli, "Starting proving process with configuration");
 
-    // match cli.pool_type {
-    //     uniswap3 => uniswap3_logic(storage_proving_config, timings, total_timer_start),
-    //     // pendle => pendle_logic(storage_proving_config, timings),
-    //     // slots => slots_logic(storage_proving_config, timings)
-    // }
-    // uniswap3_logic(storage_proving_config, &mut timings, total_timer_start);
-    pendle_logic(&storage_proving_config, &mut timings, total_timer_start);
+    let mut report_data = [0u8; 64];
 
+    match cli.pool_type {
+        PoolType::Uniswap3 => {
+            todo! ("implement uniswap3 logic");
+            // uniswap3_logic(&storage_proving_config, &mut timings, total_timer_start);
+        },
 
-    // tracing::info!(config = ?cli, "Starting proving process with configuration");
+        PoolType::Pendle => {
+            let pendle_output = match pendle_logic(&storage_proving_config, &mut timings, total_timer_start) {
+                Ok(res) => res,
+                Err(err) => {
+                    tracing::warn! ("Error occured during pendle logic execution: {}", err);
+                    return SgxStatus::Unexpected
+                }
+            };
+            let report_data_fixed_bytes = pendle_output.hash();
+            report_data[0..32].copy_from_slice(&report_data_fixed_bytes.0[0..32]);
+        }
 
+        PoolType::Slots => {
+            todo! ("implement slots logic");
+            // slots_logic(&storage_proving_config, &mut timings, total_timer_start);
+        }
+    }
+
+    tracing::debug!(report_data_hex = %hex::encode(report_data), "Constructed report_data for DCAP quote");
+    let quote_bytes = match automata_sgx_sdk::dcap::dcap_quote(report_data) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            println!("DCAP quote generation failed: {:?}", e);
+            return SgxStatus::Unexpected
+        }
+    };
+
+    tracing::info!(
+        quote_len = quote_bytes.len(),
+        "DCAP quote generated successfully"
+    );
+
+    timings.total_ms = total_timer_start.elapsed().as_secs_f64() * 1000.0;
+    tracing::debug!("Timing breakdown (if function is called multiple times, timings are measured in the last call): {:#?}", timings);
 
     SgxStatus::Success
 

@@ -1,23 +1,16 @@
 use crate::utils;
 use crate::eth;
-use crate::timing;
 
-use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
+
+use std::collections::HashMap;
 
 use crate::{
-    attestation_data::{AttestationPayload, ProvingResultOutput, SlotProofData},
-    eth::{
-        block::Block,
-        header::Header,
-        primitives::{Address, B256},
-        proof::ProofResponse,
-    },
+    attestation_data::{AttestationPayload, SlotProofData},
+    eth::primitives::B256,
     timing::{Lap, Timings},
-    trie::verify_proof,
     utils::{
-        construct_report_data, get_semantic_u256_bytes, keccak256, parse_slots_to_prove,
+        construct_report_data, keccak256,
         extract_storage_slots_with_merkle_proving,
-        RpcResponse,
         StorageProvingConfig,
     },
 };
@@ -128,7 +121,7 @@ pub fn uniswap3_logic(
     let new_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
-        storage_slots: vec![eth::primitives::FixedBytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])],
+        storage_slots: vec![B256::ZERO],
         block_number: storage_proving_config.block_number.clone(),
     };
 
@@ -165,8 +158,8 @@ pub fn uniswap3_logic(
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
         storage_slots: vec![
-            eth::primitives::FixedBytes(key_bitmap_neg1_slotkey),
-            eth::primitives::FixedBytes(key_bitmap_zero_slotkey)
+            B256::from(key_bitmap_neg1_slotkey),
+            B256::from(key_bitmap_zero_slotkey)
         ],
         block_number: storage_proving_config.block_number.clone(),
     };
@@ -225,9 +218,9 @@ pub fn uniswap3_logic(
     tick_slot_keys.push([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4]); // current liquidity as last element
 
 
-    let tick_slot_keys_fixedbytes: Vec<eth::primitives::FixedBytes<32>> = tick_slot_keys
+    let tick_slot_keys_fixedbytes: Vec<B256> = tick_slot_keys
         .into_iter()
-        .map(|slot| eth::primitives::FixedBytes::<32>(slot))
+        .map(|slot| B256::from(slot))
         .collect();
 
 
