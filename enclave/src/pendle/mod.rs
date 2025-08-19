@@ -26,25 +26,23 @@ struct ImmutablesFromMarketState {
     ln_fee_rate_root_from_storage: U256,
 }
 
-fn get_immutables_from_market_state(
-    storage_proving_config: utils::StorageProvingConfig,
-) -> anyhow::Result<ImmutablesFromMarketState> {
-    let selector = "794052f3"; // pendle-core-v2-public$ forge selectors list | grep readState(address)
-    // pendle router v4 form here https://docs.pendle.finance/Developers/Contracts/PendleRouter
-    let router_param = "000000000000000000000000888888888889758F76e7103c6CbF23ABbF58F946";
-    let call_data = format!("{}{}", selector, router_param);
+fn eth_call (
+    to: &str,
+    call_data: &str,
+    storage_proving_config: &StorageProvingConfig,
+) -> anyhow::Result<Vec<u8>> {
 
-    println! ("&storage_proving_config.block_number: {}", &storage_proving_config.block_number);
     let eth_call_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_call",
         "params": [{
-            "to": &storage_proving_config.address,
+            "to": to,
             "data": call_data
-        }, &storage_proving_config.block_number],
+        }, storage_proving_config.block_number],
         "id": 1
     })
     .to_string();
+
 
     let eth_call_response_str = make_http_request(&storage_proving_config.rpc_url, "POST", eth_call_payload.as_bytes())
         .map_err(|e| anyhow::anyhow!("eth_call HTTP request failed: {:?}", e))?;
@@ -55,43 +53,48 @@ fn get_immutables_from_market_state(
     let rpc_proof_response: RpcResponse<String> = serde_json::from_str(&eth_call_response_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
     tracing::info!("Request result parsing succeeded");
-   let hex_data = rpc_proof_response.result;
+    let hex_data = rpc_proof_response.result;
+
+    let data = hex::decode(&hex_data[2..])?;
+
+    Ok(data)
+
+
+}
+
+fn get_immutables_from_market_state(
+    storage_proving_config: utils::StorageProvingConfig,
+) -> anyhow::Result<ImmutablesFromMarketState> {
+    let selector = "794052f3"; // pendle-core-v2-public$ forge selectors list | grep readState(address)
+    // pendle router v4 form here https://docs.pendle.finance/Developers/Contracts/PendleRouter
+    let router_param = "000000000000000000000000888888888889758F76e7103c6CbF23ABbF58F946";
+    let call_data = format!("{}{}", selector, router_param);
+
+    let data = eth_call(
+        &storage_proving_config.address,
+        &call_data,
+        &storage_proving_config
+    )?;
+
 
     // struct MarketState {
         // int256 totalPt;
         // int256 totalSy;
         // int256 totalLp;
         // address treasury;
-        // int256 scalarRoot;
-        // uint256 expiry;
+        // int256 scalarRoot; // slot 4
+        // uint256 expiry; // slot 5
         // uint256 lnFeeRateRoot;
         // uint256 reserveFeePercent; // base 100
-        // uint256 lastLnImpliedRate;
+        // uint256 lastLnImpliedRate; // slot 8
     // }
-    let data = hex::decode(&hex_data[2..])?;
 
-    let total_pt = I256::from_be_bytes::<32>(data[0..32].try_into()?);
-    let total_sy = I256::from_be_bytes::<32>(data[32..64].try_into()?);
-    let total_lp = I256::from_be_bytes::<32>(data[64..96].try_into()?);
+    let scalar_root = I256::from_be_bytes::<32>(data[32*4..32*5].try_into()?);
+    let expiry = U256::from_be_bytes::<32>(data[32*5..32*6].try_into()?);
+    let last_ln_implied_rate = U256::from_be_bytes::<32>(data[32*8..32*9].try_into()?);
 
-    let treasury_bytes: [u8; 20] = data[108..128].try_into()?;
-    let treasury = Address::from(treasury_bytes);
-
-    let scalar_root = I256::from_be_bytes::<32>(data[128..160].try_into()?);
-    let expiry = U256::from_be_bytes::<32>(data[160..192].try_into()?);
-    let ln_fee_rate_root = U256::from_be_bytes::<32>(data[192..224].try_into()?);
-    let reserve_fee_percent = U256::from_be_bytes::<32>(data[224..256].try_into()?);
-    let last_ln_implied_rate = U256::from_be_bytes::<32>(data[256..288].try_into()?);
-
-
-    tracing::debug! ("readState request, total_pt: {}", total_pt);
-    tracing::debug! ("readState request, total_sy: {}", total_sy);
-    tracing::debug! ("readState request, total_lp: {}", total_lp);
-    tracing::debug! ("readState request, treasury: {}", treasury);
     tracing::debug! ("readState request, scalar_root: {}", scalar_root);
     tracing::debug! ("readState request, expiry: {}", expiry);
-    tracing::debug! ("readState request, ln_fee_rate_root: {}", ln_fee_rate_root);
-    tracing::debug! ("readState request, reserve_fee_percent: {}", reserve_fee_percent);
     tracing::debug! ("readState request, last_ln_implied_rate: {}", last_ln_implied_rate);
 
     let res = ImmutablesFromMarketState{
@@ -114,66 +117,27 @@ fn get_yt_index(
 ) -> anyhow::Result<YtStruct> {
     let read_tokens_selector = "2c8ce6bc"; // pendle-core-v2-public$ forge selectors list | grep readTokens()
 
-    let read_tokens_eth_call_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_call",
-        "params": [{
-            "to": &storage_proving_config.address,
-            "data": read_tokens_selector
-        }, &storage_proving_config.block_number],
-        "id": 1
-    })
-    .to_string();
-
-    let read_tokens_eth_call_response_str = make_http_request(&storage_proving_config.rpc_url, "POST", read_tokens_eth_call_payload.as_bytes())
-        .map_err(|e| anyhow::anyhow!("eth_call HTTP request failed: {:?}", e))?;
-
-    println! ("read_tokens_eth_call_response_str: {}", read_tokens_eth_call_response_str);
-
-
-    let read_tokens_rpc_proof_response: RpcResponse<String> = serde_json::from_str(&read_tokens_eth_call_response_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
-    tracing::info!("Request result parsing succeeded");
-    let read_tokens_hex_data = read_tokens_rpc_proof_response.result;
-
+    let read_tokens_data = eth_call(
+        &storage_proving_config.address,
+        read_tokens_selector,
+        &storage_proving_config
+    )?;
     // returns (IStandardizedYield _SY, IPPrincipalToken _PT, IPYieldToken _YT)
-    let read_tokens_data = hex::decode(&read_tokens_hex_data[2..])?;
 
     let yt_address_bytes: [u8; 20] = read_tokens_data[64+12..64+32].try_into()?;
     let yt_address = Address::from(yt_address_bytes);
+    tracing::debug!("yt_address: {}", yt_address);
 
-    println! ("yt_address: {}", yt_address);
-//////////////////////
     let py_index_current_selector = "1d52edc4"; // forge selectors list | grep 'pyIndexCurrent()'
-
-    let py_index_current_eth_call_payload = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "eth_call",
-        "params": [{
-            "to": "48bbbedc4d2491cc08915d7a5c7cc8a8edf165da", // TODO unhardcode
-            "data": py_index_current_selector
-        }, &storage_proving_config.block_number],
-        "id": 1
-    })
-    .to_string();
-
-    let py_index_current_eth_call_response_str = make_http_request(&storage_proving_config.rpc_url, "POST", py_index_current_eth_call_payload.as_bytes())
-        .map_err(|e| anyhow::anyhow!("eth_call HTTP request failed: {:?}", e))?;
-
-    println! ("py_index_current_eth_call_response_str: {}", py_index_current_eth_call_response_str);
-
-
-    let py_index_current_rpc_proof_response: RpcResponse<String> = serde_json::from_str(&py_index_current_eth_call_response_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
-    tracing::info!("Request result parsing succeeded");
-    let py_index_current_hex_data = py_index_current_rpc_proof_response.result;
-
-    // returns (IStandardizedYield _SY, IPPrincipalToken _PT, IPYieldToken _YT)
-    let py_index_current_data = hex::decode(&py_index_current_hex_data[2..])?;
+    let py_index_current_data = eth_call(
+        &hex::encode(yt_address.0),
+        py_index_current_selector,
+        &storage_proving_config
+    )?;
 
     let py_index_current = U256::from_be_bytes::<32>(py_index_current_data[0..32].try_into()?);
 
-    println! ("yt_index: {}", py_index_current);
+    tracing::debug! ("yt_index: {}", py_index_current);
 
     Ok(YtStruct{yt_address, py_index_current})
 
