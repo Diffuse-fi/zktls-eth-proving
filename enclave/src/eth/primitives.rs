@@ -202,3 +202,11 @@ impl<'de> Deserialize<'de> for U256 {
         crate::eth::de::hex_u256(deserializer)
     }
 }
+
+impl B256 {
+    pub const ZERO: Self = FixedBytes([0u8; 32]);
+
+    pub fn from_u8(value: u8) -> Self{
+        B256::from([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,value])
+    }
+}

@@ -30,7 +30,7 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
 }
 
 #[derive(Clone)]
-pub(crate) struct StorageProvingConfig {
+pub struct StorageProvingConfig {
     pub(crate) rpc_url: String,
     pub(crate) address: String,
     pub(crate) storage_slots: Vec<B256>,

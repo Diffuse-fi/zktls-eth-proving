@@ -104,9 +104,14 @@ fn get_immutables_from_market_state(
 
 }
 
+struct YtStruct {
+    yt_address: Address,
+    py_index_current: U256,
+}
+
 fn get_yt_index(
     storage_proving_config: utils::StorageProvingConfig,
-) -> anyhow::Result<U256> {
+) -> anyhow::Result<YtStruct> {
     let read_tokens_selector = "2c8ce6bc"; // pendle-core-v2-public$ forge selectors list | grep readTokens()
 
     let read_tokens_eth_call_payload = serde_json::json!({
@@ -170,26 +175,30 @@ fn get_yt_index(
 
     println! ("yt_index: {}", py_index_current);
 
-    Ok(py_index_current) // TODO actually need to return also YT address
+    Ok(YtStruct{yt_address, py_index_current})
 
 }
 
-
+pub struct PendleOutput {
+    exact_pt_in: U256,
+    exact_sy_out: I256,
+    yt_address: Address,
+    yt_index: U256,
+    scalar_root: I256,
+    expiry: U256,
+    ln_fee_rate_root: U256,
+}
 
 pub fn pendle_logic(
     storage_proving_config: &utils::StorageProvingConfig,
     timings: &mut Timings,
     total_timer_start: std::time::Instant,
-) -> anyhow::Result<I256> { // TODO fugure out what to return from here
+) -> anyhow::Result<PendleOutput> {
 
     let market_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
-        // TODO maybe more beautyful way to declare than array
-        storage_slots: vec![
-            eth::primitives::FixedBytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]),
-            eth::primitives::FixedBytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11]),
-        ],
+        storage_slots: vec![B256::from_u8(10), B256::from_u8(11)],
         block_number: storage_proving_config.block_number.clone(),
     };
 
@@ -242,23 +251,6 @@ pub fn pendle_logic(
     let ln_rate_from_storage: u128 = u128::from_be_bytes(ln_rate_bytes);
     tracing::debug!("ln_rate_from_storage = {}", ln_rate_from_storage);
 
-    // uint16 observationIndex is next 2 bytes
-    let mut obs_index_bytes = [0u8; 16];
-    obs_index_bytes[14..16].copy_from_slice(&raw_slot_11[32-12-2..32-12]);
-    let obs_index_from_storage: i128 = i128::from_be_bytes(obs_index_bytes);
-    tracing::debug!("obs_index_from_storage = {}", obs_index_from_storage);
-
-    // uint16 observationCardinality is next 2 bytes
-    let mut obs_card_bytes = [0u8; 16];
-    obs_card_bytes[14..16].copy_from_slice(&raw_slot_11[32-12-2-2..32-12-2]);
-    let obs_card_from_storage: i128 = i128::from_be_bytes(obs_card_bytes);
-    tracing::debug!("obs_card_from_storage = {}", obs_card_from_storage);
-
-    // uint16 observationCardinalityNext is next 2 bytes
-    let mut obs_card_next_bytes = [0u8; 16];
-    obs_card_next_bytes[14..16].copy_from_slice(&raw_slot_11[32-12-2-2-2..32-12-2-2]);
-    let obs_card_next_from_storage: i128 = i128::from_be_bytes(obs_card_next_bytes);
-    tracing::debug!("obs_card_next_from_storage = {}", obs_card_next_from_storage);
 
     let immutables = get_immutables_from_market_state(market_storage_proving_config.clone())
         .map_err(|e| anyhow::anyhow!("Immutables request failed: {:?}", e))?;
@@ -280,7 +272,7 @@ pub fn pendle_logic(
         last_ln_implied_rate: U256::new(ln_rate_from_storage),
     };
 
-    let yt_index = get_yt_index(market_storage_proving_config)
+    let yt_address_and_index = get_yt_index(market_storage_proving_config)
         .map_err(|e| anyhow::anyhow!("YT.newIndex() request failed: {:?}", e))?;
 
 
@@ -289,7 +281,7 @@ pub fn pendle_logic(
 
     let exact_sy_out = market_math_core::swap_exact_pt_for_sy(
         market,
-        yt_index,
+        yt_address_and_index.py_index_current,
         exact_pt_in,
         block_timestamp,
     );
@@ -300,5 +292,15 @@ pub fn pendle_logic(
     tracing::info! ("exact_sy_out: {}", exact_sy_out);
     tracing::info! ("exact_sy_out / 10**18: {}", exact_sy_out/ I256::from_limbs([1000_000_000_000_000_000u64, 0, 0, 0]));
 
-    Ok(exact_sy_out)
+    let output = PendleOutput {
+        exact_pt_in: exact_pt_in,
+        exact_sy_out: exact_sy_out,
+        yt_address: yt_address_and_index.yt_address,
+        yt_index: yt_address_and_index.py_index_current,
+        scalar_root: immutables.scalar_root_from_storage,
+        expiry: immutables.expiry_from_storage,
+        ln_fee_rate_root: immutables.ln_fee_rate_root_from_storage,
+    };
+
+    Ok(output)
 }
