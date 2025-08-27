@@ -1,8 +1,4 @@
-use crate::eth::primitives::B256;
 use anyhow::Result;
-
-/// Constant for the storage slot that contains the current price in mock strategy contracts
-pub const SLOT_TO_PROVE_MOCK: u64 = 5;
 
 /// Price tolerance for liquidation validation (5% = 0.05)
 const PRICE_TOLERANCE: f64 = 0.05;
@@ -43,12 +39,13 @@ pub fn calculate_twap(price_data: &[PriceData]) -> Result<u128> {
     for i in 0..sorted_data.len() - 1 {
         let current = &sorted_data[i];
         let next = &sorted_data[i + 1];
-        
+
         // Use block number difference as time weight
         let time_weight = next.block_number - current.block_number;
-        
+
         if time_weight > 0 {
-            weighted_sum = weighted_sum.saturating_add(current.price.saturating_mul(time_weight as u128));
+            weighted_sum =
+                weighted_sum.saturating_add(current.price.saturating_mul(time_weight as u128));
             total_time_weight = total_time_weight.saturating_add(time_weight);
         }
     }
@@ -107,22 +104,6 @@ pub fn validate_liquidation_price(
     })
 }
 
-/// Convert storage slot value to price (assumes the slot contains a u128 price)
-pub fn parse_price_from_slot(slot_value: &B256) -> u128 {
-    // Convert B256 to u128 (taking the lower 128 bits)
-    let bytes = slot_value.as_ref();
-    let mut price_bytes = [0u8; 16];
-    
-    // Copy the lower 16 bytes (128 bits) in big-endian format
-    price_bytes.copy_from_slice(&bytes[16..32]);
-    u128::from_be_bytes(price_bytes)
-}
-
-/// Get the storage slots that need to be proven for price validation
-pub fn get_price_slots() -> Vec<u64> {
-    vec![SLOT_TO_PROVE_MOCK]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,7 +114,7 @@ mod tests {
             block_number: 100,
             price: 1000,
         }];
-        
+
         let twap = calculate_twap(&price_data).unwrap();
         assert_eq!(twap, 1000);
     }
@@ -141,11 +122,20 @@ mod tests {
     #[test]
     fn test_calculate_twap_multiple_prices() {
         let price_data = vec![
-            PriceData { block_number: 100, price: 1000 },
-            PriceData { block_number: 105, price: 1200 },
-            PriceData { block_number: 110, price: 1100 },
+            PriceData {
+                block_number: 100,
+                price: 1000,
+            },
+            PriceData {
+                block_number: 105,
+                price: 1200,
+            },
+            PriceData {
+                block_number: 110,
+                price: 1100,
+            },
         ];
-        
+
         let twap = calculate_twap(&price_data).unwrap();
         // Expected: (1000*5 + 1200*5 + 1100*1) / (5+5+1) = 12100 / 11 ≈ 1100
         assert_eq!(twap, 1100);
@@ -154,10 +144,16 @@ mod tests {
     #[test]
     fn test_validate_liquidation_price_valid() {
         let price_data = vec![
-            PriceData { block_number: 100, price: 1000 },
-            PriceData { block_number: 105, price: 1050 },
+            PriceData {
+                block_number: 100,
+                price: 1000,
+            },
+            PriceData {
+                block_number: 105,
+                price: 1050,
+            },
         ];
-        
+
         let validation = validate_liquidation_price(1020, &price_data).unwrap();
         assert!(validation.is_valid);
         assert!(validation.reason.is_none());
@@ -165,23 +161,13 @@ mod tests {
 
     #[test]
     fn test_validate_liquidation_price_invalid() {
-        let price_data = vec![
-            PriceData { block_number: 100, price: 1000 },
-        ];
-        
+        let price_data = vec![PriceData {
+            block_number: 100,
+            price: 1000,
+        }];
+
         let validation = validate_liquidation_price(1200, &price_data).unwrap();
         assert!(!validation.is_valid);
         assert!(validation.reason.is_some());
-    }
-
-    #[test]
-    fn test_parse_price_from_slot() {
-        // Create a B256 with a u128 value in the lower 128 bits
-        let mut bytes = [0u8; 32];
-        bytes[16..32].copy_from_slice(&1000u128.to_be_bytes());
-        let slot_value = B256::from(bytes);
-        
-        let price = parse_price_from_slot(&slot_value);
-        assert_eq!(price, 1000);
     }
 }

@@ -74,6 +74,14 @@ impl<const N: usize> Encodable for FixedBytes<N> {
 #[derive(Clone, Copy, Hash, Debug)]
 pub struct U256(pub Uint<256, 4>);
 
+impl FromStr for U256 {
+    type Err = Box<dyn std::error::Error + Send + Sync>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(U256(Uint::<256, 4>::from_str(s)?))
+    }
+}
+
 impl Encodable for U256 {
     fn rlp_append(&self, s: &mut RlpStream) {
         if self.0.is_zero() {

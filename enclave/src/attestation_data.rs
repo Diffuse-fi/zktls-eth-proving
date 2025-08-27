@@ -12,7 +12,7 @@ pub struct SlotProofData {
     #[serde(skip_serializing)]
     pub value_hash: B256,
     #[serde(skip_serializing)]
-    pub value: Option<[u8; 32]>, // Store actual slot value for price validation (not serialized)
+    pub value_unhashed: B256, // Store actual slot value for price validation (not serialized)
 }
 
 /// Data to be included in the SGX report_data field commitment.
@@ -26,8 +26,6 @@ pub struct AttestationPayload {
     pub final_blocks_hash: B256,
     #[serde(rename = "finalPositionsHash")]
     pub final_positions_hash: B256,
-    #[serde(rename = "provenSlots")]
-    pub proven_slots: Vec<SlotProofData>,
 }
 
 /// The final JSON output.
@@ -45,4 +43,12 @@ pub struct ProvingResultOutput {
 pub struct CleanProvingResultOutput {
     pub attestation_payload: AttestationPayload,
     pub sgx_quote_hex: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct SlotsProofPayload {
+    pub block_hash: B256,
+    pub block_number: u64,
+    pub proven_slots: Vec<SlotProofData>,
+    pub block_timestamp: u64,
 }
