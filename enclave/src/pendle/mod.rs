@@ -29,16 +29,21 @@ fn eth_call(
     call_data: &str,
     storage_proving_config: &StorageProvingConfig,
 ) -> anyhow::Result<Vec<u8>> {
+    let hex_block_number = format!("0x{:x}", storage_proving_config.block_number);
+    let hex_call_data = format!("0x{}", call_data);
+
     let eth_call_payload = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_call",
         "params": [{
             "to": to,
-            "data": call_data
-        }, storage_proving_config.block_number],
+            "data": hex_call_data
+        }, hex_block_number],
         "id": 1
     })
     .to_string();
+
+    tracing::debug!("eth_call_payload: {}", eth_call_payload);
 
     let eth_call_response_str = make_http_request(
         &storage_proving_config.rpc_url,
@@ -47,10 +52,16 @@ fn eth_call(
     )
     .map_err(|e| anyhow::anyhow!("eth_call HTTP request failed: {:?}", e))?;
 
-    println!("eth_call_response_str: {}", eth_call_response_str);
+    tracing::debug!("eth_call_response_str: {}", eth_call_response_str);
 
     let rpc_proof_response: RpcResponse<String> = serde_json::from_str(&eth_call_response_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse proof RPC response: \"{}\", response_str: {}",
+                e,
+                eth_call_response_str
+            )
+        })?;
     tracing::info!("Request result parsing succeeded");
     let hex_data = rpc_proof_response.result;
 
@@ -126,10 +137,11 @@ fn get_yt_index(storage_proving_config: utils::StorageProvingConfig) -> anyhow::
     let yt_address_bytes: [u8; 20] = read_tokens_data[64 + 12..64 + 32].try_into()?;
     let yt_address = Address::from(yt_address_bytes);
     tracing::debug!("yt_address: {}", yt_address);
+    let hex_yt_addr = &hex::encode(yt_address.0);
 
     let py_index_current_selector = "1d52edc4"; // forge selectors list | grep 'pyIndexCurrent()'
     let py_index_current_data = eth_call(
-        &hex::encode(yt_address.0),
+        &format!("0x{}", hex_yt_addr),
         py_index_current_selector,
         &storage_proving_config,
     )?;
@@ -162,7 +174,7 @@ pub fn pendle_logic(
     storage_proving_config: &utils::StorageProvingConfig,
     timings: &mut Timings,
     total_timer_start: std::time::Instant,
-    block_header: Header
+    block_header: Header,
 ) -> anyhow::Result<PendleOutput> {
     let maket_data_extraction_from_storage_timing =
         Lap::new("maket_data_extraction_from_storage_timing");
@@ -171,7 +183,7 @@ pub fn pendle_logic(
         address: storage_proving_config.address.clone(),
         storage_slots: vec![B256::from_u8(10)],
         block_number: storage_proving_config.block_number.clone(),
-        tokens_amount: storage_proving_config.tokens_amount,
+        input_tokens_amount: storage_proving_config.input_tokens_amount,
     };
 
     let market_storage_storage_slots = extract_storage_slots_with_merkle_proving(
@@ -236,7 +248,7 @@ pub fn pendle_logic(
         .map_err(|e| anyhow::anyhow!("YT.newIndex() request failed: {:?}", e))?;
     yt_request_timing.stop(timings);
 
-    let exact_pt_in = storage_proving_config.tokens_amount;
+    let exact_pt_in = storage_proving_config.input_tokens_amount;
 
     tracing::debug!("block_timestamp: {}", block_timestamp);
 
