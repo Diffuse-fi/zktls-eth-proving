@@ -16,7 +16,7 @@ pub use pendle::pendle_logic;
 
 use crate::{
     attestation_data::{AttestationPayload, CleanProvingResultOutput, ProvingResultOutput},
-    eth::aliases::{Address, B256, U256},
+    eth::aliases::{Address, B256, I256, U256},
     mock_v0::{validate_liquidation_price, PriceData},
     timing::{Lap, Timings},
     utils::{
@@ -33,10 +33,8 @@ struct TimingDebugOutput {
 
 #[derive(serde::Deserialize, Debug)]
 struct ProvingTask {
-    address: String,
     vault_address: String,
-    position_id: u64,
-    liquidation_price: Option<u128>,
+    position_ids: Vec<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -89,11 +87,11 @@ struct ZkTlsProverCli {
     #[clap(
         long,
         short = 't',
-        help = "JSON array of proving tasks, e.g., '[{\"address\":\"0x123...\",\"slots\":[0,1],\"vault_address\":\"0xabc...\",\"position_id\":20,\"liquidation_price\":1000}]'"
+        help = "JSON array of proving tasks, e.g., '[{\"vault_address\":\"0xabc...\",\"position_ids\":[0, 1, 20]}]'"
     )]
     proving_tasks: String,
-    #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
-    pt_tokens_amount: String,
+    #[clap(long, short = 'i', help = "tokens amount to swap in AMM")]
+    input_tokens_amount: U256,
     #[clap(
         long,
         short = 'p',
@@ -101,8 +99,6 @@ struct ZkTlsProverCli {
         help = "Choose either pool type to calculate price impact(uniswap3, pendle)"
     )]
     pool_type: PoolType,
-    #[clap(long, short = 't', help = "tokens amount to swap in AMM")]
-    tokens_amount: U256,
 }
 
 #[no_mangle]
@@ -196,6 +192,13 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     }
 }
 
+fn request_stuff_from_dima_s_contract(vault_address: &str, position_id: &u64) -> (u128, String) {
+    (
+        990_000_000_000_000_000u128, /*0.99*/
+        "0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed".to_string(),
+    )
+}
+
 fn verify_attestation_with_timing(
     cli: ZkTlsProverCli,
     timings: &mut Timings,
@@ -240,6 +243,8 @@ fn verify_attestation_with_timing(
 
     if target_blocks.is_empty() {
         anyhow::bail!("All calculated block numbers are invalid (<=0)");
+    } else {
+        tracing::info!("target blocks: {:?}", target_blocks);
     }
 
     let mut all_blocks: Vec<(u64, B256)> = Vec::new();
@@ -253,32 +258,36 @@ fn verify_attestation_with_timing(
 
     // Validate liquidation prices for tasks that specify them
     for task in &proving_tasks {
-        if let Some(liquidation_price) = task.liquidation_price {
-            tracing::info!(
-                vault_address = %task.vault_address,
-                position_id = task.position_id,
-                liquidation_price = liquidation_price,
-                "Validating liquidation price"
-            );
+        for position_id in &task.position_ids {
+            // todo not optimal, could request all prices in one request
+            let (liquidation_price, pendle_amm_address_str) =
+                request_stuff_from_dima_s_contract(&task.vault_address, &position_id);
 
             // Collect price data from strategy slot 5 across all blocks
             let mut price_data: Vec<PriceData> = Vec::new();
-            let strategy_address = Address::from_str(&task.address).map_err(|e| {
-                anyhow::anyhow!("Invalid strategy address format '{}': {}", task.address, e)
+            let pendle_amm_address = Address::from_str(&pendle_amm_address_str).map_err(|e| {
+                anyhow::anyhow!(
+                    "Invalid strategy address format '{}': {}",
+                    pendle_amm_address_str,
+                    e
+                )
             })?;
 
             // Extract price data from each block for this strategy
-            for (block_number, _) in &all_blocks {
+            for block_number in &target_blocks {
+                tracing::debug!("fetching price data for block {}", block_number);
                 // todo do we need to pass header
                 // todo block nr should be str or u64 everywhere
-                let block_header = get_block_header_from_rpc(&cli.rpc_url.clone(), &block_number.to_string(), timings)?;
+                let hex_block_number = format!("0x{:x}", block_number);
+                let block_header =
+                    get_block_header_from_rpc(&cli.rpc_url.clone(), &hex_block_number, timings)?;
 
                 let storage_proving_config = &utils::StorageProvingConfig {
                     rpc_url: cli.rpc_url.clone(),
-                    address: strategy_address,
+                    address: pendle_amm_address,
                     storage_slots: Vec::new(),
                     block_number: block_number.clone(),
-                    tokens_amount: cli.tokens_amount
+                    input_tokens_amount: cli.input_tokens_amount,
                 };
 
                 let pendle_output = match pendle_logic(
@@ -289,16 +298,28 @@ fn verify_attestation_with_timing(
                 ) {
                     Ok(res) => res,
                     Err(e) => {
-                        todo!("handle pendle errors properly");
+                        todo!("handle pendle errors properly: {}", e);
                     }
                 };
-                let concrete_price_data = pendle_output.exact_sy_out;
-                // todo which type should we use? in solidity is us I256
-                // todo handle pendle putput hashing
+                let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
+                let input_tokens_amount_unsigned: I256 =
+                    I256::try_from(cli.input_tokens_amount.0).unwrap();
+                tracing::debug!(
+                    "input_tokens_amount_unsigned: {}",
+                    input_tokens_amount_unsigned
+                );
+                let price_from_pendle_amm =
+                    pendle_output.exact_sy_out * e18 / input_tokens_amount_unsigned;
+                // todo handle pendle output hashing
+                let price_from_pendle_amm_u128: u128 = price_from_pendle_amm.try_into().unwrap();
+                tracing::debug!(
+                    "price_from_pendle_amm float: {}",
+                    price_from_pendle_amm_u128 as f64 / 1_000_000_000_000_000_000u128 as f64
+                );
 
-                price_data.push(PriceData{
+                price_data.push(PriceData {
                     block_number: *block_number,
-                    price: concrete_price_data.0.as_limbs()[0].into(), // todo: band-aided to compile
+                    price: price_from_pendle_amm_u128,
                 });
             }
 
@@ -306,7 +327,7 @@ fn verify_attestation_with_timing(
             if price_data.is_empty() {
                 anyhow::bail!(
                     "No price data found for strategy {} across {} blocks", // todo rephrase
-                    task.address,
+                    pendle_amm_address_str,
                     all_blocks.len()
                 );
             }
@@ -317,7 +338,7 @@ fn verify_attestation_with_timing(
             if !validation.is_valid {
                 anyhow::bail!(
                     "Liquidation price validation failed for position {} in vault {}: {}",
-                    task.position_id,
+                    position_id,
                     task.vault_address,
                     validation
                         .reason
@@ -327,7 +348,7 @@ fn verify_attestation_with_timing(
 
             tracing::info!(
                 vault_address = %task.vault_address,
-                position_id = task.position_id,
+                position_id = position_id,
                 liquidation_price = validation.liquidation_price,
                 twap_price = validation.twap_price,
                 price_difference_pct = validation.price_difference_pct * 100.0,

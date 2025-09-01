@@ -29,7 +29,7 @@ pub struct StorageProvingConfig {
     pub(crate) address: Address,
     pub(crate) storage_slots: Vec<B256>,
     pub(crate) block_number: u64,
-    pub(crate) tokens_amount: U256,
+    pub(crate) input_tokens_amount: U256,
 }
 
 #[allow(dead_code)]
@@ -179,8 +179,14 @@ pub fn get_block_header_from_rpc(
     );
 
     let lap_parse = Lap::new("get_block_header::json_parsing");
-    let rpc_block_response: RpcResponse<Block> = serde_json::from_str(&response_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse block header RPC response: {}", e))?;
+    let rpc_block_response: RpcResponse<Block> =
+        serde_json::from_str(&response_str).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse block header RPC response: {}, response_str: {}",
+                e,
+                response_str
+            )
+        })?;
     lap_parse.stop(timings);
 
     let header = rpc_block_response.result.header;
@@ -236,7 +242,13 @@ fn get_proof_from_rpc(
 
     let lap_parse = Lap::new("get_proof::json_parsing");
     let rpc_proof_response: RpcResponse<ProofResponse> = serde_json::from_str(&response_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse proof RPC response: {}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to parse proof RPC response: \"{}\", response_str: {}",
+                e,
+                response_str
+            )
+        })?;
     lap_parse.stop(timings);
 
     tracing::info!("Proof received successfully");
