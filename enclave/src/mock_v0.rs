@@ -69,19 +69,15 @@ pub fn validate_liquidation_price(
     price_data: &[PriceData],
 ) -> Result<LiquidationValidation> {
     let twap_price = calculate_twap(price_data)?;
+    tracing::debug!(
+        "twap_price human readable: {}",
+        twap_price as f64 / 1_000_000_000_000_000_000u64 as f64
+    );
 
     // Calculate percentage difference
-    let price_diff = if liquidation_price > twap_price {
-        liquidation_price - twap_price
-    } else {
-        twap_price - liquidation_price
-    };
+    let price_diff = twap_price as i128 - liquidation_price as i128;
 
-    let price_difference_pct = if twap_price > 0 {
-        (price_diff as f64) / (twap_price as f64)
-    } else {
-        1.0 // 100% difference if TWAP is zero
-    };
+    let price_difference_pct = price_diff as f64 / twap_price as f64;
 
     let is_valid = price_difference_pct <= PRICE_TOLERANCE;
 
@@ -146,15 +142,33 @@ mod tests {
         let price_data = vec![
             PriceData {
                 block_number: 100,
-                price: 1000,
+                price: 1_000_000_000_000_000_000,
             },
             PriceData {
                 block_number: 105,
-                price: 1050,
+                price: 1_000_000_000_000_000_001,
             },
         ];
 
-        let validation = validate_liquidation_price(1020, &price_data).unwrap();
+        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
+        assert!(validation.is_valid);
+        assert!(validation.reason.is_none());
+    }
+
+        #[test]
+    fn test_validate_liquidation_price_zero() {
+        let price_data = vec![
+            PriceData {
+                block_number: 100,
+                price: 0,
+            },
+            PriceData {
+                block_number: 105,
+                price: 0,
+            },
+        ];
+
+        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
         assert!(validation.is_valid);
         assert!(validation.reason.is_none());
     }
@@ -163,10 +177,10 @@ mod tests {
     fn test_validate_liquidation_price_invalid() {
         let price_data = vec![PriceData {
             block_number: 100,
-            price: 1000,
+            price: 2_000_000_000_000_000_000,
         }];
 
-        let validation = validate_liquidation_price(1200, &price_data).unwrap();
+        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
         assert!(!validation.is_valid);
         assert!(validation.reason.is_some());
     }
