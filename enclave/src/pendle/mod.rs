@@ -21,7 +21,6 @@ struct ImmutablesFromMarketState {
     scalar_root_from_rpc: I256,
     expiry_from_rpc: U256,
     ln_fee_rate_root_from_rpc: U256,
-    last_ln_implied_rate_from_rpc: U256,
 }
 
 fn eth_call(
@@ -99,21 +98,15 @@ fn get_immutables_from_market_state(
     let scalar_root = I256::from_be_bytes::<32>(data[32 * 4..32 * 5].try_into()?);
     let expiry = U256::from_be_bytes::<32>(data[32 * 5..32 * 6].try_into()?);
     let ln_fee_rate_root = U256::from_be_bytes::<32>(data[32 * 6..32 * 7].try_into()?);
-    let last_ln_implied_rate = U256::from_be_bytes::<32>(data[32 * 8..32 * 9].try_into()?);
 
     tracing::debug!("readState request, scalar_root: {}", scalar_root);
     tracing::debug!("readState request, expiry: {}", expiry);
     tracing::debug!("readState request, ln_fee_rate_root: {}", ln_fee_rate_root);
-    tracing::debug!(
-        "readState request, last_ln_implied_rate: {}",
-        last_ln_implied_rate
-    );
 
     let res = ImmutablesFromMarketState {
         scalar_root_from_rpc: scalar_root,
         expiry_from_rpc: expiry,
         ln_fee_rate_root_from_rpc: ln_fee_rate_root,
-        last_ln_implied_rate_from_rpc: last_ln_implied_rate,
     };
 
     Ok(res)
@@ -164,7 +157,7 @@ pub struct PendleOutput {
     pub scalar_root: I256,
     pub expiry: U256,
     pub ln_fee_rate_root: U256,
-    pub last_ln_implied_rate_overriden: U256,
+    // request fee from factory storage instead of requesting ln fee rate root overriden from function
     pub block_timestamp: u64,
     pub block_number: u64,
     pub block_hash: B256,
@@ -181,7 +174,7 @@ pub fn pendle_logic(
     let market_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
-        storage_slots: vec![B256::from_u8(10)],
+        storage_slots: vec![B256::from_u8(10), B256::from_u8(11)],
         block_number: storage_proving_config.block_number.clone(),
         input_tokens_amount: storage_proving_config.input_tokens_amount,
     };
@@ -197,13 +190,23 @@ pub fn pendle_logic(
         .0;
     tracing::debug!("raw_slot_10: {}", hex::encode(raw_slot_10));
 
+    let raw_slot_11 = market_storage_storage_slots.proven_slots[1]
+        .value_unhashed
+        .0;
+    tracing::debug!("raw_slot_11: {}", hex::encode(raw_slot_11));
+
     let block_timestamp = U256::from_limbs([market_storage_storage_slots.block_timestamp, 0, 0, 0]);
 
-    // slots 10
+    // slots 10, 11
     //  struct MarketStorage {
     //     int128 totalPt;
     //     int128 totalSy;
-    //     ...
+    //     1 SLOT = 256 bits
+    //     uint96 lastLnImpliedRate;
+    //     uint16 observationIndex;
+    //     uint16 observationCardinality;
+    //     uint16 observationCardinalityNext;
+    //     1 SLOT = 144 bits
     // }
 
     // int128 totalPt is first 16 bytes
@@ -218,6 +221,11 @@ pub fn pendle_logic(
     let total_sy_from_storage: i128 = i128::from_be_bytes(sy_bytes);
     tracing::debug!("total_sy_from_storage = {}", total_sy_from_storage);
 
+    let mut last_ln_implied_rate_bytes = [0u8; 32];
+    last_ln_implied_rate_bytes[20..32].copy_from_slice(&raw_slot_11[32-12..32]);
+    let last_ln_inplied_rate_from_storage: U256 = U256::from_be_bytes(last_ln_implied_rate_bytes);
+    tracing::debug!("last_ln_inplied_rate_from_storage = {}", last_ln_inplied_rate_from_storage);
+
     maket_data_extraction_from_storage_timing.stop(timings);
 
     let immutables_request_timing = Lap::new("immutables_request_timing");
@@ -227,7 +235,6 @@ pub fn pendle_logic(
     let scalar_root_from_rpc = immutables.scalar_root_from_rpc;
     let expiry_from_rpc = immutables.expiry_from_rpc;
     let ln_fee_rate_root_from_rpc = immutables.ln_fee_rate_root_from_rpc;
-    let last_ln_implied_rate_from_rpc = immutables.last_ln_implied_rate_from_rpc;
     tracing::debug!("ln_fee_rate_root_from_rpc: {}", ln_fee_rate_root_from_rpc);
     immutables_request_timing.stop(timings);
 
@@ -240,7 +247,7 @@ pub fn pendle_logic(
         scalar_root: scalar_root_from_rpc,
         expiry: expiry_from_rpc,
         ln_fee_rate_root: ln_fee_rate_root_from_rpc,
-        last_ln_implied_rate: last_ln_implied_rate_from_rpc,
+        last_ln_implied_rate: last_ln_inplied_rate_from_storage,
     };
 
     let yt_request_timing = Lap::new("yt_request_timing");
@@ -284,7 +291,6 @@ pub fn pendle_logic(
         scalar_root: immutables.scalar_root_from_rpc,
         expiry: immutables.expiry_from_rpc,
         ln_fee_rate_root: immutables.ln_fee_rate_root_from_rpc,
-        last_ln_implied_rate_overriden: immutables.last_ln_implied_rate_from_rpc,
         block_timestamp: market_storage_storage_slots.block_timestamp,
         block_number: market_storage_storage_slots.block_number,
         block_hash: market_storage_storage_slots.block_hash,
