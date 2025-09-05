@@ -5,6 +5,8 @@ mod errors;
 mod market_math_core;
 mod math;
 
+use std::str::FromStr;
+
 use crate::utils;
 
 use crate::{
@@ -16,6 +18,8 @@ use crate::{
         StorageProvingConfig,
     },
 };
+
+const PENDLE_ROUTER_V4: &str = "888888888889758F76e7103c6CbF23ABbF58F946";
 
 struct ImmutablesFromMarketState {
     scalar_root_from_rpc: I256,
@@ -74,7 +78,7 @@ fn get_immutables_from_market_state(
 ) -> anyhow::Result<ImmutablesFromMarketState> {
     let selector = "794052f3"; // pendle-core-v2-public$ forge selectors list | grep readState(address)
                                // pendle router v4 form here https://docs.pendle.finance/Developers/Contracts/PendleRouter
-    let router_param = "000000000000000000000000888888888889758F76e7103c6CbF23ABbF58F946";
+    let router_param = format!("{}{}", "000000000000000000000000", PENDLE_ROUTER_V4);
     let call_data = format!("{}{}", selector, router_param);
 
     let data = eth_call(
@@ -149,6 +153,30 @@ fn get_yt_index(storage_proving_config: utils::StorageProvingConfig) -> anyhow::
     })
 }
 
+// mapping(address => mapping(address => uint80)) internal overriddenFee;
+// _overriddenFee = overriddenFee[router][market];
+fn compute_overridden_fee_key(
+    router: [u8; 20],
+    market: [u8; 20],
+    mapping_slot: u64,
+) -> [u8; 32] {
+    // keccak256(abi.encode(market, keccak256(abi.encode(router, mapping_slot))));
+
+    // abi.encode(address, u64)
+    let mut first_buffer = [0u8; 64];
+    first_buffer[12..32].copy_from_slice(&router);
+    let slot_bytes = mapping_slot.to_be_bytes();
+    first_buffer[32 + (32 - 8)..64].copy_from_slice(&slot_bytes);
+
+    // abi.encode(address, bytes32)
+    let first_hash = keccak256(&first_buffer);
+    let mut second_buffer = [0u8; 64];
+    second_buffer[12..32].copy_from_slice(&market);
+    second_buffer[32..64].copy_from_slice(&first_hash);
+
+    keccak256(&second_buffer)
+}
+
 pub struct PendleOutput {
     pub exact_pt_in: U256,
     pub exact_sy_out: I256,
@@ -183,7 +211,7 @@ pub fn pendle_logic(
         &market_storage_proving_config,
         timings,
         total_timer_start,
-        block_header,
+        block_header.clone(),
     )?;
     let raw_slot_10 = market_storage_storage_slots.proven_slots[0]
         .value_unhashed
@@ -222,9 +250,12 @@ pub fn pendle_logic(
     tracing::debug!("total_sy_from_storage = {}", total_sy_from_storage);
 
     let mut last_ln_implied_rate_bytes = [0u8; 32];
-    last_ln_implied_rate_bytes[20..32].copy_from_slice(&raw_slot_11[32-12..32]);
+    last_ln_implied_rate_bytes[20..32].copy_from_slice(&raw_slot_11[32 - 12..32]);
     let last_ln_inplied_rate_from_storage: U256 = U256::from_be_bytes(last_ln_implied_rate_bytes);
-    tracing::debug!("last_ln_inplied_rate_from_storage = {}", last_ln_inplied_rate_from_storage);
+    tracing::debug!(
+        "last_ln_inplied_rate_from_storage = {}",
+        last_ln_inplied_rate_from_storage
+    );
 
     maket_data_extraction_from_storage_timing.stop(timings);
 
@@ -234,9 +265,61 @@ pub fn pendle_logic(
 
     let scalar_root_from_rpc = immutables.scalar_root_from_rpc;
     let expiry_from_rpc = immutables.expiry_from_rpc;
+    // todo request from dedicated function instead of readState, and later from our contract
     let ln_fee_rate_root_from_rpc = immutables.ln_fee_rate_root_from_rpc;
     tracing::debug!("ln_fee_rate_root_from_rpc: {}", ln_fee_rate_root_from_rpc);
     immutables_request_timing.stop(timings);
+
+    let bera_factory_address = Address::from_str("0x8A09574b0401A856d89d1b583eE22E8cb0C5530B")?;
+    println!("pendle_router_address");
+    let pendle_router_address = Address::from_str(PENDLE_ROUTER_V4)?;
+    println!("pendle_router_address");
+
+    let mut factory_overriden_fee_proving_config = StorageProvingConfig {
+        rpc_url: storage_proving_config.rpc_url.clone(),
+        address: bera_factory_address,
+        storage_slots: Vec::new(),
+        block_number: storage_proving_config.block_number,
+        input_tokens_amount: storage_proving_config.input_tokens_amount,
+    };
+
+    // forge inspect contracts/core/Market/v3/PendleMarketFactoryV3.sol:PendleMarketFactoryV3 storageLayout
+    // | Name          | Type                                           | Slot |
+    // | overriddenFee | mapping(address => mapping(address => uint80)) | 51   |
+    let factory_overriden_fee_storage_slot_key = compute_overridden_fee_key(
+        pendle_router_address.0,
+        storage_proving_config.address.0,
+        51,
+    );
+
+    factory_overriden_fee_proving_config.storage_slots =
+        vec![B256::from(factory_overriden_fee_storage_slot_key)];
+
+    let factory_overriden_fee_storage_slot = extract_storage_slots_with_merkle_proving(
+        &factory_overriden_fee_proving_config,
+        timings,
+        total_timer_start,
+        block_header,
+    )?
+    .proven_slots[0]
+        .value_unhashed
+        .0;
+
+    // uint80 is last 10 bytes of 32byte slot
+    let mut overridden_fee_bytes = [0u8; 32];
+    overridden_fee_bytes[22..32].copy_from_slice(&factory_overriden_fee_storage_slot[22..32]);
+    let overridden_fee_from_storage: U256 = U256::from_be_bytes(overridden_fee_bytes);
+    tracing::debug!(
+        "overridden_fee_from_storage = {}",
+        overridden_fee_from_storage
+    );
+
+    // market.lnFeeRateRoot = overriddenFee == 0 ? lnFeeRateRoot : overriddenFee;
+    let ln_rate_root_overriden = if overridden_fee_bytes == [0u8; 32] {
+        ln_fee_rate_root_from_rpc
+    } else {
+        overridden_fee_from_storage
+    };
 
     // in solidity market is constructed in PendleParketV3.readState,
     // but here we access storage in mod.rs, so I decided to construct market here
@@ -246,7 +329,7 @@ pub fn pendle_logic(
         total_sy: I256::try_from(total_sy_from_storage).unwrap(),
         scalar_root: scalar_root_from_rpc,
         expiry: expiry_from_rpc,
-        ln_fee_rate_root: ln_fee_rate_root_from_rpc,
+        ln_fee_rate_root: ln_rate_root_overriden,
         last_ln_implied_rate: last_ln_inplied_rate_from_storage,
     };
 
