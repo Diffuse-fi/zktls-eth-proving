@@ -10,9 +10,8 @@ use crate::utils;
 use crate::{
     eth::aliases::{Address, B256, I256, U256},
     eth::header::Header,
-    timing::{Lap, Timings},
     utils::{
-        extract_storage_slots_with_merkle_proving, keccak256, make_http_request, RpcResponse,
+        extract_storage_slots_with_merkle_proving, make_http_request, RpcResponse,
         StorageProvingConfig,
     },
 };
@@ -172,12 +171,8 @@ pub struct PendleOutput {
 
 pub fn pendle_logic(
     storage_proving_config: &utils::StorageProvingConfig,
-    timings: &mut Timings,
-    total_timer_start: std::time::Instant,
     block_header: Header,
 ) -> anyhow::Result<PendleOutput> {
-    let maket_data_extraction_from_storage_timing =
-        Lap::new("maket_data_extraction_from_storage_timing");
     let market_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
         address: storage_proving_config.address.clone(),
@@ -188,8 +183,6 @@ pub fn pendle_logic(
 
     let market_storage_storage_slots = extract_storage_slots_with_merkle_proving(
         &market_storage_proving_config,
-        timings,
-        total_timer_start,
         block_header,
     )?;
     let raw_slot_10 = market_storage_storage_slots.proven_slots[0]
@@ -218,9 +211,7 @@ pub fn pendle_logic(
     let total_sy_from_storage: i128 = i128::from_be_bytes(sy_bytes);
     tracing::debug!("total_sy_from_storage = {}", total_sy_from_storage);
 
-    maket_data_extraction_from_storage_timing.stop(timings);
 
-    let immutables_request_timing = Lap::new("immutables_request_timing");
     let immutables = get_immutables_from_market_state(market_storage_proving_config.clone())
         .map_err(|e| anyhow::anyhow!("Immutables request failed: {:?}", e))?;
 
@@ -229,7 +220,6 @@ pub fn pendle_logic(
     let ln_fee_rate_root_from_rpc = immutables.ln_fee_rate_root_from_rpc;
     let last_ln_implied_rate_from_rpc = immutables.last_ln_implied_rate_from_rpc;
     tracing::debug!("ln_fee_rate_root_from_rpc: {}", ln_fee_rate_root_from_rpc);
-    immutables_request_timing.stop(timings);
 
     // in solidity market is constructed in PendleParketV3.readState,
     // but here we access storage in mod.rs, so I decided to construct market here
@@ -243,23 +233,19 @@ pub fn pendle_logic(
         last_ln_implied_rate: last_ln_implied_rate_from_rpc,
     };
 
-    let yt_request_timing = Lap::new("yt_request_timing");
     let yt_address_and_index = get_yt_index(market_storage_proving_config)
         .map_err(|e| anyhow::anyhow!("YT.newIndex() request failed: {:?}", e))?;
-    yt_request_timing.stop(timings);
 
     let exact_pt_in = storage_proving_config.input_tokens_amount;
 
     tracing::debug!("block_timestamp: {}", block_timestamp);
 
-    let solidity_logic_execution_timing = Lap::new("solidity_logic_execution_timing");
     let exact_sy_out = market_math_core::swap_exact_pt_for_sy(
         market,
         yt_address_and_index.py_index_current,
         exact_pt_in,
         block_timestamp,
     )?;
-    solidity_logic_execution_timing.stop(timings);
 
     tracing::info!(
         "storage_proving_config.block_number: {}",

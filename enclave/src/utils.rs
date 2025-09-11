@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
-use std::{collections::HashMap, ffi::CString, os::raw::c_char, str::FromStr};
+use std::{collections::HashMap, ffi::CString, os::raw::c_char};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::{
@@ -11,7 +11,6 @@ use crate::{
         header::Header,
         proof::ProofResponse,
     },
-    timing::{Lap, Timings},
     trie::verify_proof,
 };
 
@@ -156,7 +155,6 @@ pub(crate) fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow:
 pub fn get_block_header_from_rpc(
     rpc_url: &str,
     block_tag: &str,
-    timings: &mut Timings,
 ) -> anyhow::Result<Header> {
     tracing::info!(block_tag, "Fetching block header");
 
@@ -168,17 +166,14 @@ pub fn get_block_header_from_rpc(
     })
     .to_string();
 
-    let lap_tls = Lap::new("get_block_header::http_request");
     let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
         .map_err(|e| anyhow::anyhow!("HTTP request for block header failed: {:?}", e))?;
-    lap_tls.stop(timings);
 
     tracing::debug!(
         response_body_len = response_str.len(),
         "Received block header response body"
     );
 
-    let lap_parse = Lap::new("get_block_header::json_parsing");
     let rpc_block_response: RpcResponse<Block> =
         serde_json::from_str(&response_str).map_err(|e| {
             anyhow::anyhow!(
@@ -187,7 +182,6 @@ pub fn get_block_header_from_rpc(
                 response_str
             )
         })?;
-    lap_parse.stop(timings);
 
     let header = rpc_block_response.result.header;
     let rpc_block_hash = header.block_hash_untrusted;
@@ -209,7 +203,6 @@ fn get_proof_from_rpc(
     contract_address: Address,
     slot_keys: &[B256],
     block_number: u64,
-    timings: &mut Timings,
 ) -> anyhow::Result<ProofResponse> {
     let slot_keys_hex: Vec<String> = slot_keys
         .iter()
@@ -230,17 +223,14 @@ fn get_proof_from_rpc(
     })
     .to_string();
 
-    let lap_tls = Lap::new("get_proof::http_request");
     let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
         .map_err(|e| anyhow::anyhow!("HTTP request for proof failed: {:?}", e))?;
-    lap_tls.stop(timings);
 
     tracing::debug!(
         response_body_len = response_str.len(),
         "Received proof response body"
     );
 
-    let lap_parse = Lap::new("get_proof::json_parsing");
     let rpc_proof_response: RpcResponse<ProofResponse> = serde_json::from_str(&response_str)
         .map_err(|e| {
             anyhow::anyhow!(
@@ -249,7 +239,6 @@ fn get_proof_from_rpc(
                 response_str
             )
         })?;
-    lap_parse.stop(timings);
 
     tracing::info!("Proof received successfully");
     Ok(rpc_proof_response.result)
@@ -257,8 +246,6 @@ fn get_proof_from_rpc(
 
 pub(crate) fn extract_storage_slots_with_merkle_proving(
     cli: &StorageProvingConfig,
-    timings: &mut Timings,
-    total_timer_start: std::time::Instant,
     block_header: Header,
 ) -> anyhow::Result<SlotsProofPayload> {
     let contract_address = cli.address;
@@ -267,24 +254,17 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
 
     let block_number_val = block_header.number;
 
-    let lap2 = Lap::new("get_proof");
-
     let proof_response = get_proof_from_rpc(
         &cli.rpc_url,
         contract_address,
         target_slot_keys,
         block_number_val,
-        timings,
     )?;
-    lap2.stop(timings);
-    let lap3 = Lap::new("verify_mpt_proof");
     let verified_slot_values =
-        verify_proof(proof_response, block_header.state_root.as_ref(), timings)
+        verify_proof(proof_response, block_header.state_root.as_ref())
             .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
-    lap3.stop(timings);
     tracing::info!("MPT proof verification successful");
 
-    let lap_processing = Lap::new("slot_processing");
     let mut processed_semantic_values: HashMap<B256, [u8; 32]> = HashMap::new();
     let mut non_existent_slots: Vec<B256> = Vec::new();
 
@@ -314,7 +294,6 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
             non_existent_slots.push(proved_key);
         }
     }
-    lap_processing.stop(timings);
 
     if !non_existent_slots.is_empty() {
         let non_existent_json = serde_json::json!({
@@ -347,8 +326,6 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
         count = attested_slots_data.len(),
         "Slots prepared for attestation payload"
     );
-
-    timings.total_ms = total_timer_start.elapsed().as_secs_f64() * 1000.0;
 
     Ok(SlotsProofPayload {
         block_hash: block_header.hash(),
