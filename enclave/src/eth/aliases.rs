@@ -3,7 +3,7 @@
 use crate::eth::{primitives::FixedBytes, signed::Signed};
 use ruint::Uint;
 
-#[derive(Clone, Copy, Hash, Debug)]
+#[derive(Clone, Copy, Hash, Debug, PartialEq)]
 pub struct U256(pub Uint<256, 4>);
 pub type I256 = Signed<256, 4>;
 

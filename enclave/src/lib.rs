@@ -15,7 +15,6 @@ use clap::Parser;
 pub use pendle::pendle_logic;
 
 use crate::{
-    attestation_data::CleanProvingResultOutput,
     cli::{CliMode, ZkTlsProverCli},
     handlers::{handle_liquidation, handle_position_creation},
 };
@@ -44,44 +43,33 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         }
     };
 
-    let result = match mode {
-        CliMode::Liquidation(args) => handle_liquidation(args),
-        CliMode::PositionCreation(args) => handle_position_creation(args),
-    };
-
-    match result {
-        Ok(result) => {
-            tracing::info!("Proving process completed successfully.");
-
-            let clean_result = CleanProvingResultOutput {
-                attestation_payload: result.attestation_payload,
-                sgx_quote_hex: result.sgx_quote_hex,
-            };
-            match serde_json::to_string_pretty(&clean_result) {
-                Ok(json_output) => println!("{}", json_output),
+    match mode {
+        CliMode::Liquidation(args) => {
+            match handle_liquidation(args) {
                 Err(e) => {
-                    tracing::error!(error = %e, "Failed to serialize result to JSON");
-                    return SgxStatus::Unexpected;
-                }
+                    eprintln!("Error during liquidation validation: {}", e);
+                    SgxStatus::Unexpected
+                },
+                Ok(proving_result) => {
+                    let output = serde_json::to_string_pretty(&proving_result).expect("serde_json::to_string_pretty liquidation");
+                    println!("{}", output);
+                    SgxStatus::Success
+                },
             }
-            SgxStatus::Success
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Proving process failed");
-
-            let clean_error = serde_json::json!({
-                "error": format!("{:?}", e),
-                "status": "failed"
-            });
-            let json_output = serde_json::to_string_pretty(&clean_error);
-            println!(
-                "{}",
-                json_output
-                    .unwrap_or_else(|e| format!("Failed to serialize error output: {}", e))
-            );
-
-            SgxStatus::Unexpected
-        }
+        },
+        CliMode::PositionCreation(args) => {
+            match handle_position_creation(args) {
+                Err(e) => {
+                    eprintln!("Error during position creation: {}", e);
+                    SgxStatus::Unexpected
+                },
+                Ok(proving_result) => {
+                    let output = serde_json::to_string_pretty(&proving_result).expect("serde_json::to_string_pretty liquidation");
+                    println!("{}", output);
+                    SgxStatus::Success
+                },
+            }
+        },
     }
 }
 

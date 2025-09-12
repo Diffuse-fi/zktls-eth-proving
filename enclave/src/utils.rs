@@ -4,7 +4,7 @@ use std::{collections::HashMap, ffi::CString, os::raw::c_char};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::{
-    attestation_data::{AttestationPayload, SlotProofData, SlotsProofPayload},
+    attestation_data::{AttestationPayloadLiquidation, SlotProofData, SlotsProofPayload},
     eth::{
         aliases::{Address, B256, U256},
         block::Block,
@@ -13,6 +13,7 @@ use crate::{
     },
     trie::verify_proof,
 };
+use crate::attestation_data::AttestationPayloadBorrowerPosition;
 
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut res = [0u8; 32];
@@ -61,10 +62,16 @@ pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u
     keccak256(&data)
 }
 
-pub(crate) fn construct_report_data(payload: &AttestationPayload) -> Result<[u8; 64]> {
+pub(crate) fn construct_report_data_liquidation(payload: &AttestationPayloadLiquidation) -> Result<[u8; 64]> {
     let mut report_data = [0u8; 64];
     report_data[0..32].copy_from_slice(payload.final_blocks_hash.as_ref());
     report_data[32..64].copy_from_slice(payload.final_positions_hash.as_ref());
+    Ok(report_data)
+}
+
+pub(crate) fn construct_report_data_borrow_position(payload: &AttestationPayloadBorrowerPosition) -> Result<[u8; 64]> {
+    let mut report_data = [0u8; 64];
+    report_data[0..32].copy_from_slice(payload.final_blocks_hash.as_ref());
     Ok(report_data)
 }
 

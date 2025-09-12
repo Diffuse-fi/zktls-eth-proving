@@ -17,7 +17,7 @@ pub struct SlotProofData {
 /// Data to be included in the SGX report_data field commitment.
 /// This structure itself is not directly put into report_data, but hashed.
 #[derive(Serialize, Debug, Clone)]
-pub struct AttestationPayload {
+pub struct AttestationPayloadLiquidation {
     pub blocks: Vec<(u64, B256)>,
     #[serde(rename = "vaultPositions")]
     pub vault_positions: Vec<(Address, u64)>,
@@ -27,19 +27,28 @@ pub struct AttestationPayload {
     pub final_positions_hash: B256,
 }
 
+/// Data to be included in the SGX report_data field commitment.
+/// This structure itself is not directly put into report_data, but hashed.
+#[derive(Serialize, Debug, Clone)]
+pub struct AttestationPayloadBorrowerPosition {
+    pub blocks: Vec<(u64, B256)>,
+    #[serde(rename = "finalBlocksHash")]
+    pub final_blocks_hash: B256,
+}
+
 /// The final JSON output.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct ProvingResultOutput {
-    pub attestation_payload: AttestationPayload,
+pub struct ProvingResultOutputLiquidation {
+    pub attestation_payload: AttestationPayloadLiquidation,
     pub sgx_quote_hex: String,
 }
 
-/// Clean JSON output without timing information for parsing.
+/// The final JSON output.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct CleanProvingResultOutput {
-    pub attestation_payload: AttestationPayload,
+pub struct ProvingResultOutputBorrowerPosition {
+    pub attestation_payload: AttestationPayloadBorrowerPosition,
     pub sgx_quote_hex: String,
 }
 

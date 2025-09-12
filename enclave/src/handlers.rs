@@ -1,23 +1,25 @@
 use crate::{
-    attestation_data::{AttestationPayload, ProvingResultOutput},
+    attestation_data::{AttestationPayloadLiquidation, ProvingResultOutputLiquidation},
     cli::{LiquidationArgs, PositionCreationArgs},
     eth::aliases::{Address, B256, I256},
     mock_v0::{validate_liquidation_price, PriceData},
     pendle::pendle_logic,
     utils::{
-        calculate_final_blocks_hash, calculate_final_positions_hash, construct_report_data,
+        calculate_final_blocks_hash, calculate_final_positions_hash, construct_report_data_liquidation,
         get_block_header_from_rpc, StorageProvingConfig,
     },
     request_stuff_from_dima_s_contract,
 };
 use std::str::FromStr;
+use crate::attestation_data::{AttestationPayloadBorrowerPosition, ProvingResultOutputBorrowerPosition};
 use crate::eth::aliases::U256;
 use crate::pendle::PendleOutput;
+use crate::utils::construct_report_data_borrow_position;
 use crate::vault_v1::get_pending_borrow_request_data;
 
 pub fn handle_liquidation(
     args: LiquidationArgs,
-) -> anyhow::Result<ProvingResultOutput> {
+) -> anyhow::Result<ProvingResultOutputLiquidation> {
     let proving_tasks: Vec<crate::ProvingTask> = serde_json::from_str(&args.proving_tasks)
         .map_err(|e| anyhow::anyhow!("Failed to parse proving tasks JSON: {}", e))?;
 
@@ -56,10 +58,10 @@ pub fn handle_liquidation(
 
     tracing::info!("Liquidation price validation completed, preparing attestation payload");
 
-    let attestation_payload = create_attestation_payload(all_blocks, all_vault_position_pairs)?;
-    let quote_bytes = generate_sgx_quote(&attestation_payload)?;
+    let attestation_payload = create_attestation_payload_liquidation(all_blocks, all_vault_position_pairs)?;
+    let quote_bytes = generate_sgx_quote_liquidation(&attestation_payload)?;
 
-    Ok(ProvingResultOutput {
+    Ok(ProvingResultOutputLiquidation {
         attestation_payload,
         sgx_quote_hex: hex::encode(quote_bytes),
     })
@@ -67,7 +69,7 @@ pub fn handle_liquidation(
 
 pub fn handle_position_creation(
     args: PositionCreationArgs,
-) -> anyhow::Result<ProvingResultOutput> {
+) -> anyhow::Result<ProvingResultOutputBorrowerPosition> {
     tracing::info!(
         vault_address = %args.vault_address,
         position_id = args.position_id,
@@ -90,14 +92,12 @@ pub fn handle_position_creation(
 
     let (collateral_amount, mut pendle_pool_address) = get_pending_borrow_request_data(&args.rpc_url, vault_address, args.position_id, None)?;
 
-    println!("collateral amount! : {}", collateral_amount);
-    println!("pendle pool address: {}", pendle_pool_address);
     pendle_pool_address = Address::from_str("0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed")?;
     // core logic
-    let mut extra_quote = vec![];
-    let mut yt_address_quote = Address::from([0u8; 20]);
-    let mut scalar_root_quote = I256::ZERO;
+    let mut yt_index_quote = Vec::with_capacity(target_blocks.len());
     let mut prices = Vec::with_capacity(target_blocks.len());
+    let mut all_blocks = Vec::with_capacity(target_blocks.len());
+
     // todo: prove storage slots from event_emitter contract (collateralType, collateralAmount, ...)
     for block in target_blocks {
         let config = StorageProvingConfig {
@@ -111,32 +111,20 @@ pub fn handle_position_creation(
         let block_header =
             get_block_header_from_rpc(&args.rpc_url.clone(), &hex_block_number)?;
 
+        all_blocks.push((block, block_header.hash()));
+
         let PendleOutput {
-            // const for any block
-            yt_address,
-            scalar_root,
-
-            // needs to be included in the quote
-            yt_index,
-            block_timestamp,
-            last_ln_implied_rate_overriden,
-
-            ln_fee_rate_root,
             exact_pt_in,
             exact_sy_out,
 
-            expiry: _expiry, // todo: prove with storage slots
-            .. // don't need to prove block_number, block_hash and ln_fee_rate_root,
+            // should be const for any block, included in quote
+            yt_index,
+            ..
         } = pendle_logic(&config, block_header)?;
 
-        (yt_address_quote, scalar_root_quote) = (yt_address, scalar_root);
-        extra_quote.push(yt_index);
-        extra_quote.push(U256::from_limbs([block_timestamp, 0, 0, 0]));
-        extra_quote.push(last_ln_implied_rate_overriden);
-
+        yt_index_quote.push(yt_index);
         let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
         let exact_pt_in_signed = I256::try_from(exact_pt_in.0).map_err(|e| anyhow::anyhow!("Failed to convert exact_pt_in to I256: {}", e))?;
-        println!("exact_pt_in.0: {}", exact_pt_in.0);
         let current_price = (exact_sy_out * e18) / exact_pt_in_signed;
         prices.push(current_price);
     }
@@ -147,18 +135,21 @@ pub fn handle_position_creation(
         sum += *price;
     }
     let twap_current_price = sum / prices_count;
-    println!("PRICES: {:?}", prices);
     println!("TWAP CURRENT PRICE: {}", twap_current_price);
     println!("Position creation validation completed, preparing attestation payload");
 
-    let attestation_payload = create_attestation_payload(all_blocks, all_vault_position_pairs)?;
-    let quote_bytes = generate_sgx_quote(&attestation_payload)?;
 
-    todo!()
-    // Ok(ProvingResultOutput {
-    //     attestation_payload,
-    //     sgx_quote_hex: hex::encode(quote_bytes),
-    // })
+    if !yt_index_quote.windows(2).all(|w| w[0] == w[1]) {
+        todo!("yt_index should be the same for all of the blocks in TWAP")
+    }
+
+    let attestation_payload = create_attestation_payload_borrow_position(all_blocks, yt_index_quote.first().expect("We don't have any yt_index").clone())?;
+    let quote_bytes = generate_sgx_quote_borrower_position(&attestation_payload)?;
+
+    Ok(ProvingResultOutputBorrowerPosition {
+        attestation_payload,
+        sgx_quote_hex: hex::encode(quote_bytes),
+    })
 }
 
 fn calculate_target_blocks(
@@ -299,14 +290,14 @@ fn validate_all_liquidation_prices(
     Ok(())
 }
 
-fn create_attestation_payload(
+fn create_attestation_payload_liquidation(
     all_blocks: Vec<(u64, B256)>,
     all_vault_position_pairs: Vec<(Address, u64)>,
-) -> anyhow::Result<AttestationPayload> {
+) -> anyhow::Result<AttestationPayloadLiquidation> {
     let final_blocks_hash = calculate_final_blocks_hash(&all_blocks);
     let final_positions_hash = calculate_final_positions_hash(&all_vault_position_pairs);
 
-    Ok(AttestationPayload {
+    Ok(AttestationPayloadLiquidation {
         blocks: all_blocks,
         vault_positions: all_vault_position_pairs,
         final_blocks_hash: final_blocks_hash.into(),
@@ -314,15 +305,50 @@ fn create_attestation_payload(
     })
 }
 
-fn generate_sgx_quote(
-    attestation_payload: &AttestationPayload,
+fn create_attestation_payload_borrow_position(
+    all_blocks: Vec<(u64, B256)>,
+    yt_index: U256,
+) -> anyhow::Result<AttestationPayloadBorrowerPosition> {
+    let final_blocks_hash = calculate_final_blocks_hash(&all_blocks);
+
+    // todo: use yt_index
+    Ok(AttestationPayloadBorrowerPosition {
+        blocks: all_blocks,
+        final_blocks_hash: final_blocks_hash.into(),
+    })
+}
+
+fn generate_sgx_quote_liquidation(
+    attestation_payload: &AttestationPayloadLiquidation,
 ) -> anyhow::Result<Vec<u8>> {
-    let report_data = construct_report_data(attestation_payload)?;
+    let report_data = construct_report_data_liquidation(attestation_payload)?;
 
     tracing::debug!(
         report_data_hex = %hex::encode(report_data),
         final_blocks_hash_hex = %hex::encode(attestation_payload.final_blocks_hash),
         final_positions_hash_hex = %hex::encode(attestation_payload.final_positions_hash),
+        "Constructed report_data for DCAP quote"
+    );
+
+    let quote_bytes = automata_sgx_sdk::dcap::dcap_quote(report_data)
+        .map_err(|e| anyhow::anyhow!("DCAP quote generation failed: {:?}", e))?;
+
+    tracing::info!(
+        quote_len = quote_bytes.len(),
+        "DCAP quote generated successfully"
+    );
+
+    Ok(quote_bytes)
+}
+
+fn generate_sgx_quote_borrower_position(
+    attestation_payload: &AttestationPayloadBorrowerPosition,
+) -> anyhow::Result<Vec<u8>> {
+    let report_data = construct_report_data_borrow_position(attestation_payload)?;
+
+    tracing::debug!(
+        report_data_hex = %hex::encode(report_data),
+        final_blocks_hash_hex = %hex::encode(attestation_payload.final_blocks_hash),
         "Constructed report_data for DCAP quote"
     );
 
