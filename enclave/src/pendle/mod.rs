@@ -158,15 +158,7 @@ fn get_yt_index(storage_proving_config: utils::StorageProvingConfig) -> anyhow::
 pub struct PendleOutput {
     pub exact_pt_in: U256,
     pub exact_sy_out: I256,
-    pub yt_address: Address,
     pub yt_index: U256,
-    pub scalar_root: I256,
-    pub expiry: U256,
-    pub ln_fee_rate_root: U256,
-    pub last_ln_implied_rate_overriden: U256,
-    pub block_timestamp: u64,
-    pub block_number: u64,
-    pub block_hash: B256,
 }
 
 pub fn pendle_logic(
@@ -265,15 +257,7 @@ pub fn pendle_logic(
     let output = PendleOutput {
         exact_pt_in,
         exact_sy_out,
-        yt_address: yt_address_and_index.yt_address,
         yt_index: yt_address_and_index.py_index_current,
-        scalar_root: immutables.scalar_root_from_rpc,
-        expiry: immutables.expiry_from_rpc,
-        ln_fee_rate_root: immutables.ln_fee_rate_root_from_rpc,
-        last_ln_implied_rate_overriden: immutables.last_ln_implied_rate_from_rpc,
-        block_timestamp: market_storage_storage_slots.block_timestamp,
-        block_number: market_storage_storage_slots.block_number,
-        block_hash: market_storage_storage_slots.block_hash,
     };
 
     Ok(output)
