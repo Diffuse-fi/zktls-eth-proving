@@ -136,6 +136,7 @@ pub fn handle_position_creation(
 
         let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
         let exact_pt_in_signed = I256::try_from(exact_pt_in.0).map_err(|e| anyhow::anyhow!("Failed to convert exact_pt_in to I256: {}", e))?;
+        println!("exact_pt_in.0: {}", exact_pt_in.0);
         let current_price = (exact_sy_out * e18) / exact_pt_in_signed;
         prices.push(current_price);
     }
@@ -150,8 +151,8 @@ pub fn handle_position_creation(
     println!("TWAP CURRENT PRICE: {}", twap_current_price);
     println!("Position creation validation completed, preparing attestation payload");
 
-    // let attestation_payload = create_attestation_payload(all_blocks, all_vault_position_pairs)?;
-    // let quote_bytes = generate_sgx_quote(&attestation_payload)?;
+    let attestation_payload = create_attestation_payload(all_blocks, all_vault_position_pairs)?;
+    let quote_bytes = generate_sgx_quote(&attestation_payload)?;
 
     todo!()
     // Ok(ProvingResultOutput {
