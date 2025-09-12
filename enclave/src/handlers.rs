@@ -11,6 +11,7 @@ use crate::{
     request_stuff_from_dima_s_contract,
 };
 use std::str::FromStr;
+use tracing::info;
 use crate::attestation_data::{AttestationPayloadBorrowerPosition, ProvingResultOutputBorrowerPosition};
 use crate::eth::aliases::U256;
 use crate::pendle::PendleOutput;
@@ -135,8 +136,8 @@ pub fn handle_position_creation(
         sum += *price;
     }
     let twap_current_price = sum / prices_count;
-    println!("TWAP CURRENT PRICE: {}", twap_current_price);
-    println!("Position creation validation completed, preparing attestation payload");
+    info!("TWAP CURRENT PRICE: {}", twap_current_price);
+    info!("Position creation validation completed, preparing attestation payload");
 
 
     if !yt_index_quote.windows(2).all(|w| w[0] == w[1]) {

@@ -2,6 +2,7 @@ use crate::eth::aliases::{Address, U256};
 use anyhow::{anyhow, Result};
 use ruint::Uint;
 use serde_json::Value;
+use tracing::info;
 use crate::utils::make_http_request;
 
 #[derive(Debug, Clone)]
@@ -196,7 +197,7 @@ fn get_strategy_from_rpc(
     })
         .to_string();
 
-    tracing::info!(%vault_address, ?strategy_id, "Fetching strategy data");
+    info!(%vault_address, ?strategy_id, "Fetching strategy data");
 
     let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
         .map_err(|e| anyhow!("HTTP request for strategy failed: {:?}", e))?;
@@ -245,31 +246,26 @@ fn get_strategy_from_rpc(
     offset += 64;
 
     let balance_u256 = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
-    println!("DEBUG: balance_u256 = {:?}", balance_u256);
 
     let balance = match balance_u256.to_u64() {
         Some(val) => val,
         None => {
-            println!("ERROR: Balance too large: {:?}", balance_u256);
             return Err(anyhow!("Balance value too large for u64: {:?}", balance_u256));
         }
     };
     offset += 64;
 
     let assets_u256 = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
-    println!("DEBUG: assets_u256 = {:?}", assets_u256);
 
     let assets = match assets_u256.to_u64() {
         Some(val) => val,
         None => {
-            println!("ERROR: Assets too large: {:?}", assets_u256);
             return Err(anyhow!("Assets value too large for u64: {:?}", assets_u256));
         }
     };
     offset += 64;
 
-    println!("here");
-    let string_offset = usize::from_str_radix(&result_hex[offset..offset + 64], 16)?;
+    let _string_offset = usize::from_str_radix(&result_hex[offset..offset + 64], 16)?;
     offset += 64;
 
     let pool_hex = &result_hex[offset + 24..offset + 64];
@@ -278,49 +274,8 @@ fn get_strategy_from_rpc(
     pool_array.copy_from_slice(&pool_bytes);
     let pool = Address::from(pool_array);
 
-    println!("pool: {}", pool);
-    let name = if string_offset > 0 && result_hex.len() > string_offset * 2 {
-        let string_data_start = string_offset * 2;
-
-        println!("DEBUG: String offset: {}, String data start position: {}", string_offset, string_data_start);
-        println!("DEBUG: Result hex length: {}", result_hex.len());
-
-        if result_hex.len() >= string_data_start + 64 {
-            let string_length_hex = &result_hex[string_data_start..string_data_start + 64];
-            println!("DEBUG: String length hex: {}", string_length_hex);
-
-            match usize::from_str_radix(string_length_hex, 16) {
-                Ok(string_length) if string_length < 10000 => {
-                    println!("DEBUG: String length: {}", string_length);
-
-                    let string_hex_start = string_data_start + 64;
-                    let string_hex_end = string_hex_start + (string_length * 2);
-
-                    if result_hex.len() >= string_hex_end {
-                        let string_bytes = hex::decode(&result_hex[string_hex_start..string_hex_end])?;
-                        String::from_utf8(string_bytes).unwrap_or_else(|_| String::new())
-                    } else {
-                        println!("WARN: String data extends beyond hex length");
-                        String::new()
-                    }
-                }
-                Ok(string_length) => {
-                    println!("ERROR: String length too large: {}", string_length);
-                    String::new()
-                }
-                Err(e) => {
-                    println!("ERROR: Failed to parse string length: {}", e);
-                    String::new()
-                }
-            }
-        } else {
-            println!("WARN: Not enough data for string length field");
-            String::new()
-        }
-    } else {
-        println!("DEBUG: String offset is 0 or insufficient data");
-        String::new()
-    };
+    // todo: properly parse name
+    let name = "";
 
     Ok(StrategyData {
         addr,
@@ -342,20 +297,12 @@ pub fn get_pending_borrow_request_data(
 ) -> Result<(u64, Address)> {
     // 1. get borrower position
     let position = get_borrower_position_from_rpc(rpc_url, vault_address, position_id, block_number)?;
-
-    println!("position_id = {}", position_id);
-
-    println!("strategy id: {:?}", position.strategy_id);
-    println!("strategy id: 0x{}", hex::encode(position.strategy_id.0.to_be_bytes::<32>()));
-
-    println!("position: {:?}", position);
+    info!("position: {:?}", position);
 
     // 2. get strategy data
     let strategy = get_strategy_from_rpc(rpc_url, vault_address, position.strategy_id, block_number)?;
+    info!("strategy: {:?}", strategy);
 
-    println!("strategy: {:?}", strategy);
-
-    // You'll also need to convert these U256 values to u64 if you want to return them
     let collateral_given = position.collateral_given.to_u64()
         .ok_or_else(|| anyhow!("Collateral given too large for u64"))?;
 
