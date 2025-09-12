@@ -20,7 +20,7 @@ pub struct SlotProofData {
 pub struct AttestationPayloadLiquidation {
     pub blocks: Vec<(u64, B256)>,
     #[serde(rename = "vaultPositions")]
-    pub vault_positions: Vec<(Address, u64)>,
+    pub vault_positions: Vec<(Address, u64, U256, U256)>,
     #[serde(rename = "finalBlocksHash")]
     pub final_blocks_hash: B256,
     #[serde(rename = "finalPositionsHash")]
