@@ -275,7 +275,7 @@ fn get_strategy_from_rpc(
     let pool = Address::from(pool_array);
 
     // todo: properly parse name
-    let name = "";
+    let name = String::new();
 
     Ok(StrategyData {
         addr,
