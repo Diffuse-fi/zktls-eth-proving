@@ -52,12 +52,14 @@ pub(crate) fn calculate_final_blocks_hash(blocks: &[(u64, B256)]) -> [u8; 32] {
     keccak256(&data)
 }
 
-pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u64)]) -> [u8; 32] {
+pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u64, U256, U256)]) -> [u8; 32] {
     let mut data = Vec::new();
-    for (vault_address, position_id) in vault_position_pairs {
+    for (vault_address, position_id, yt_index, min_price) in vault_position_pairs {
         data.extend_from_slice(vault_address.as_ref()); // 20 bytes
         data.extend_from_slice(&[0u8; 4]); // 4 bytes of padding
         data.extend_from_slice(&position_id.to_be_bytes()); // 8 bytes
+        data.extend_from_slice(&yt_index.0.to_be_bytes::<32>());
+        data.extend_from_slice(&min_price.0.to_be_bytes::<32>());
     }
     keccak256(&data)
 }

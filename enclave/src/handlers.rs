@@ -46,8 +46,19 @@ pub fn handle_liquidation(
 
     let target_blocks = calculate_target_blocks(&args.rpc_url, &block_offsets)?;
 
-    let all_blocks: Vec<(u64, B256)> = Vec::new();
-    let all_vault_position_pairs: Vec<(Address, u64)> = Vec::new();
+    let mut all_blocks_duplicated: Vec<(u64, B256)> = Vec::new();
+    let mut all_vault_position_pairs: Vec<(Address, u64, U256, U256)> = Vec::new();
+
+    validate_all_liquidation_prices(
+        &proving_tasks, 
+        &target_blocks, 
+        &args,
+        &mut all_blocks_duplicated,
+        &mut all_vault_position_pairs,
+    )?;
+
+    let all_blocks_size = all_blocks_duplicated.len() / all_vault_position_pairs.len();
+    let all_blocks = all_blocks_duplicated.into_iter().take(all_blocks_size).collect::<Vec<_>>();
 
     tracing::info!(
         total_blocks = all_blocks.len(),
@@ -55,7 +66,15 @@ pub fn handle_liquidation(
         "All blocks and tasks completed, validating liquidation prices"
     );
 
-    validate_all_liquidation_prices(&proving_tasks, &target_blocks, &args)?;
+
+    for (b, h) in all_blocks.clone() {
+        tracing::debug!("all_blocks: {} {}", b, h);
+    }
+    
+    for (a, b, c, d) in all_vault_position_pairs.clone() {
+        tracing::debug!("all_vault_position_pairs: {} {} {} {}", a, b, c, d);
+    }
+
 
     tracing::info!("Liquidation price validation completed, preparing attestation payload");
 
@@ -179,9 +198,13 @@ fn collect_price_data_for_block(
     block_number: u64,
     pendle_amm_address: Address,
     input_tokens_amount: crate::eth::aliases::U256,
+    all_blocks: &mut Vec<(u64, B256)>,
+    latest_position: &mut (Address, u64, U256, U256),
+
 ) -> anyhow::Result<PriceData> {
     let hex_block_number = format!("0x{:x}", block_number);
     let block_header = get_block_header_from_rpc(rpc_url, &hex_block_number)?;
+    all_blocks.push((block_number, block_header.hash()));
 
     let storage_proving_config = StorageProvingConfig {
         rpc_url: rpc_url.to_string(),
@@ -193,6 +216,9 @@ fn collect_price_data_for_block(
 
     let pendle_output = pendle_logic(&storage_proving_config, block_header)
         .map_err(|e| anyhow::anyhow!("Pendle logic failed: {}", e))?;
+
+    latest_position.2 = pendle_output.yt_index;
+    latest_position.3 = U256::from_i256(pendle_output.exact_sy_out * I256::unchecked_from(9) / I256::unchecked_from(10)).expect("unable to convert i256 to u256");
 
     let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
     let input_tokens_amount_unsigned = I256::try_from(input_tokens_amount.0).unwrap();
@@ -220,6 +246,8 @@ fn validate_position_liquidation(
     position_id: u64,
     target_blocks: &[u64],
     args: &LiquidationArgs,
+    all_blocks: &mut Vec::<(u64, B256)>,
+    all_vault_position_pairs: &mut Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<()> {
     let (liquidation_price, pendle_amm_address_str) =
         request_stuff_from_dima_s_contract(&task.vault_address, &position_id);
@@ -234,6 +262,11 @@ fn validate_position_liquidation(
 
     let mut price_data: Vec<PriceData> = Vec::new();
 
+    let vault_address = Address::from_str(&task.vault_address)
+        .map_err(|e| anyhow::anyhow!("Invalid vault address format: {}", e))?;
+
+    all_vault_position_pairs.push((vault_address, position_id, U256::ZERO, U256::ZERO));
+
     for &block_number in target_blocks {
         tracing::debug!("fetching price data for block {}", block_number);
         let data = collect_price_data_for_block(
@@ -241,6 +274,8 @@ fn validate_position_liquidation(
             block_number,
             pendle_amm_address,
             args.input_tokens_amount,
+            all_blocks,
+            all_vault_position_pairs.last_mut().expect("unable to get all_vault_position_pairs.last_mut()"),
         )?;
         price_data.push(data);
     }
@@ -282,10 +317,12 @@ fn validate_all_liquidation_prices(
     proving_tasks: &[crate::ProvingTask],
     target_blocks: &[u64],
     args: &LiquidationArgs,
+    all_blocks: &mut Vec<(u64, B256)>,
+    all_vault_position_pairs: &mut Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<()> {
     for task in proving_tasks {
         for &position_id in &task.position_ids {
-            validate_position_liquidation(task, position_id, target_blocks, args)?;
+            validate_position_liquidation(task, position_id, target_blocks, args, all_blocks, all_vault_position_pairs)?;
         }
     }
     Ok(())
@@ -293,7 +330,7 @@ fn validate_all_liquidation_prices(
 
 fn create_attestation_payload_liquidation(
     all_blocks: Vec<(u64, B256)>,
-    all_vault_position_pairs: Vec<(Address, u64)>,
+    all_vault_position_pairs: Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<AttestationPayloadLiquidation> {
     let final_blocks_hash = calculate_final_blocks_hash(&all_blocks);
     let final_positions_hash = calculate_final_positions_hash(&all_vault_position_pairs);
