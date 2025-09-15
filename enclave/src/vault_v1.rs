@@ -33,7 +33,7 @@ pub struct StrategyData {
     pub end_date: u64,
     pub borrow_apr: u64,
     pub balance: u64,
-    pub assets: u64,
+    pub assets: U256,
     pub name: String,
     pub pool: Address,
 }
@@ -255,14 +255,7 @@ fn get_strategy_from_rpc(
     };
     offset += 64;
 
-    let assets_u256 = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
-
-    let assets = match assets_u256.to_u64() {
-        Some(val) => val,
-        None => {
-            return Err(anyhow!("Assets value too large for u64: {:?}", assets_u256));
-        }
-    };
+    let assets = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
     let _string_offset = usize::from_str_radix(&result_hex[offset..offset + 64], 16)?;
