@@ -52,6 +52,11 @@ pub(crate) fn calculate_final_blocks_hash(blocks: &[(u64, B256)]) -> [u8; 32] {
     keccak256(&data)
 }
 
+pub(crate) fn calculate_hash_from_u256(value: U256) -> [u8; 32] {
+    let bytes: [u8; 32] = value.0.to_be_bytes();
+    keccak256(&bytes).into()
+}
+
 pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u64)]) -> [u8; 32] {
     let mut data = Vec::new();
     for (vault_address, position_id) in vault_position_pairs {
@@ -72,6 +77,7 @@ pub(crate) fn construct_report_data_liquidation(payload: &AttestationPayloadLiqu
 pub(crate) fn construct_report_data_borrow_position(payload: &AttestationPayloadBorrowerPosition) -> Result<[u8; 64]> {
     let mut report_data = [0u8; 64];
     report_data[0..32].copy_from_slice(payload.final_blocks_hash.as_ref());
+    report_data[32..64].copy_from_slice(payload.payload_hash.as_ref());
     Ok(report_data)
 }
 

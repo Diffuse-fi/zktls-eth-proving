@@ -15,7 +15,7 @@ use tracing::info;
 use crate::attestation_data::{AttestationPayloadBorrowerPosition, ProvingResultOutputBorrowerPosition};
 use crate::eth::aliases::U256;
 use crate::pendle::PendleOutput;
-use crate::utils::construct_report_data_borrow_position;
+use crate::utils::{calculate_hash_from_u256, construct_report_data_borrow_position};
 use crate::vault_v1::get_pending_borrow_request_data;
 
 pub fn handle_liquidation(
@@ -136,15 +136,17 @@ pub fn handle_position_creation(
         sum += *price;
     }
     let twap_current_price = sum / prices_count;
-    info!("TWAP CURRENT PRICE: {}", twap_current_price);
-    info!("Position creation validation completed, preparing attestation payload");
 
+    // todo: change to pendle liquidation price calculation using (twap_price, fee_liq, leverage)
+    let liqudation_price = U256::from_str("1100000000000000000")?;
+
+    info!("Position creation validation completed, preparing attestation payload");
 
     if !yt_index_quote.windows(2).all(|w| w[0] == w[1]) {
         todo!("yt_index should be the same for all of the blocks in TWAP")
     }
 
-    let attestation_payload = create_attestation_payload_borrow_position(all_blocks, yt_index_quote.first().expect("We don't have any yt_index").clone())?;
+    let attestation_payload = create_attestation_payload_borrow_position(all_blocks, yt_index_quote.first().expect("We don't have any yt_index").clone(), liqudation_price)?;
     let quote_bytes = generate_sgx_quote_borrower_position(&attestation_payload)?;
 
     Ok(ProvingResultOutputBorrowerPosition {
@@ -309,13 +311,16 @@ fn create_attestation_payload_liquidation(
 fn create_attestation_payload_borrow_position(
     all_blocks: Vec<(u64, B256)>,
     yt_index: U256,
+    liquidation_price: U256,
 ) -> anyhow::Result<AttestationPayloadBorrowerPosition> {
     let final_blocks_hash = calculate_final_blocks_hash(&all_blocks);
+    let payload_hash = calculate_hash_from_u256(liquidation_price);
 
     // todo: use yt_index
     Ok(AttestationPayloadBorrowerPosition {
         blocks: all_blocks,
         final_blocks_hash: final_blocks_hash.into(),
+        payload_hash: payload_hash.into(),
     })
 }
 
