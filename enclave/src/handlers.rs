@@ -138,7 +138,7 @@ pub fn handle_position_creation(
     let twap_current_price = sum / prices_count;
 
     // todo: change to pendle liquidation price calculation using (twap_price, fee_liq, leverage)
-    let liqudation_price = U256::from_str("1100000000000000000")?;
+    let liqudation_price = U256::from_str("1100000000000000000").unwrap();
 
     info!("Position creation validation completed, preparing attestation payload");
 
