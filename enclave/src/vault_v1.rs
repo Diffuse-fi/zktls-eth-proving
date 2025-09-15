@@ -258,7 +258,7 @@ fn get_strategy_from_rpc(
     let assets = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
-    let _string_offset = usize::from_str_radix(&result_hex[offset..offset + 64], 16)?;
+    let _string_offset = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
     let pool_hex = &result_hex[offset + 24..offset + 64];
