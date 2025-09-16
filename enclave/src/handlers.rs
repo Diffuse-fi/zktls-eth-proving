@@ -91,14 +91,15 @@ pub fn handle_position_creation(
     let vault_address = Address::from_str(&args.vault_address)
         .map_err(|e| anyhow::anyhow!("Invalid vault address format: {}", e))?;
 
-    let (collateral_amount, mut pendle_pool_address) = get_pending_borrow_request_data(&args.rpc_url, vault_address, args.position_id, None)?;
+    let (collateral_amount, leverage, mut pendle_pool_address) = get_pending_borrow_request_data(&args.rpc_url, vault_address, args.position_id, None)?;
 
-    pendle_pool_address = Address::from_str("0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed")?;
+    // pendle_pool_address = Address::from_str("0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed")?;
     // core logic
     let mut yt_index_quote = Vec::with_capacity(target_blocks.len());
     let mut prices = Vec::with_capacity(target_blocks.len());
     let mut all_blocks = Vec::with_capacity(target_blocks.len());
 
+    tracing::info!("using pendle address: {}, and leverage: {}", pendle_pool_address, leverage);
     // todo: prove storage slots from event_emitter contract (collateralType, collateralAmount, ...)
     for block in target_blocks {
         let config = StorageProvingConfig {

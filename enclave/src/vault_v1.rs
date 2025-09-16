@@ -287,7 +287,7 @@ pub fn get_pending_borrow_request_data(
     vault_address: Address,
     position_id: u64,
     block_number: Option<u64>,
-) -> Result<(u64, Address)> {
+) -> Result<(u64, u64, Address)> {
     // 1. get borrower position
     let position = get_borrower_position_from_rpc(rpc_url, vault_address, position_id, block_number)?;
     info!("position: {:?}", position);
@@ -299,5 +299,5 @@ pub fn get_pending_borrow_request_data(
     let collateral_given = position.collateral_given.to_u64()
         .ok_or_else(|| anyhow!("Collateral given too large for u64"))?;
 
-    Ok((collateral_given, strategy.pool))
+    Ok((collateral_given, position.leverage.to_u64().unwrap(), strategy.pool))
 }
