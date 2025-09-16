@@ -3,6 +3,7 @@ use crate::{
     cli::{LiquidationArgs, PositionCreationArgs},
     eth::aliases::{Address, B256, I256},
     mock_v0::{validate_liquidation_price, PriceData},
+    vault_v1::get_borrower_position_from_rpc,
     pendle::pendle_logic,
     utils::{
         calculate_final_blocks_hash, calculate_final_positions_hash, construct_report_data_liquidation,
@@ -218,6 +219,7 @@ fn collect_price_data_for_block(
 
     let pendle_output = pendle_logic(&storage_proving_config, block_header)
         .map_err(|e| anyhow::anyhow!("Pendle logic failed: {}", e))?;
+    // TODO it is ok if reverts because not enough liquidity in the pool, still need to liquidate, need to handle properly
 
     latest_position.2 = pendle_output.yt_index;
     latest_position.3 = U256::from_i256(pendle_output.exact_sy_out * I256::unchecked_from(9) / I256::unchecked_from(10)).expect("unable to convert i256 to u256");
@@ -269,13 +271,21 @@ fn validate_position_liquidation(
 
     all_vault_position_pairs.push((vault_address, position_id, U256::ZERO, U256::ZERO));
 
+    let input_tokens_amount = get_borrower_position_from_rpc(
+        &args.rpc_url,
+        vault_address,
+        position_id,
+        None,
+        // todo: is it ok to request only from the latest block?
+    )?.strategy_balance;
+
     for &block_number in target_blocks {
         tracing::debug!("fetching price data for block {}", block_number);
         let data = collect_price_data_for_block(
             &args.rpc_url,
             block_number,
             pendle_amm_address,
-            args.input_tokens_amount,
+            input_tokens_amount,
             all_blocks,
             all_vault_position_pairs.last_mut().expect("unable to get all_vault_position_pairs.last_mut()"),
         )?;

@@ -54,9 +54,6 @@ pub struct ZkTlsProverCli {
     )]
     pub proving_tasks: Option<String>,
     
-    #[clap(long, short = 'i', help = "tokens amount to swap in AMM")]
-    pub input_tokens_amount: Option<U256>,
-    
     #[clap(
         long,
         short = 'p',
@@ -86,7 +83,6 @@ pub struct LiquidationArgs {
     pub rpc_url: String,
     pub block_offsets: String,
     pub proving_tasks: String,
-    pub input_tokens_amount: U256,
     pub pool_type: PoolType,
 }
 
@@ -133,8 +129,6 @@ impl TryFrom<ZkTlsProverCli> for CliMode {
                     .ok_or_else(|| anyhow::anyhow!("block-offsets is required for liquidation mode"))?,
                 proving_tasks: cli.proving_tasks
                     .ok_or_else(|| anyhow::anyhow!("proving-tasks is required for liquidation mode"))?,
-                input_tokens_amount: cli.input_tokens_amount
-                    .ok_or_else(|| anyhow::anyhow!("input-tokens-amount is required for liquidation mode"))?,
                 pool_type: cli.pool_type,
             }))
         }

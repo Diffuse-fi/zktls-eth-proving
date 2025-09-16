@@ -52,7 +52,7 @@ fn decode_u256_from_hex(hex_str: &str) -> Result<U256> {
     Ok(U256(uint))
 }
 
-fn get_borrower_position_from_rpc(
+pub fn get_borrower_position_from_rpc(
     rpc_url: &str,
     vault_address: Address,
     position_id: u64,
