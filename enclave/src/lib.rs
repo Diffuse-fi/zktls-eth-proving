@@ -72,10 +72,3 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
         },
     }
 }
-
-pub fn request_stuff_from_dima_s_contract(vault_address: &str, position_id: &u64) -> (u128, String) {
-    (
-        990_000_000_000_000_000u128,
-        "0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed".to_string(),
-    )
-}

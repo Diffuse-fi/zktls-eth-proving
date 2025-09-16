@@ -3,13 +3,12 @@ use crate::{
     cli::{LiquidationArgs, PositionCreationArgs},
     eth::aliases::{Address, B256, I256},
     mock_v0::{validate_liquidation_price, PriceData},
-    vault_v1::get_borrower_position_from_rpc,
+    vault_v1::{get_borrower_position_from_rpc, get_strategy_from_rpc},
     pendle::pendle_logic,
     utils::{
         calculate_final_blocks_hash, calculate_final_positions_hash, construct_report_data_liquidation,
         get_block_header_from_rpc, StorageProvingConfig,
     },
-    request_stuff_from_dima_s_contract,
 };
 use std::str::FromStr;
 use tracing::info;
@@ -253,16 +252,6 @@ fn validate_position_liquidation(
     all_blocks: &mut Vec::<(u64, B256)>,
     all_vault_position_pairs: &mut Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<()> {
-    let (liquidation_price, pendle_amm_address_str) =
-        request_stuff_from_dima_s_contract(&task.vault_address, &position_id);
-
-    let pendle_amm_address = Address::from_str(&pendle_amm_address_str).map_err(|e| {
-        anyhow::anyhow!(
-            "Invalid strategy address format '{}': {}",
-            pendle_amm_address_str,
-            e
-        )
-    })?;
 
     let mut price_data: Vec<PriceData> = Vec::new();
 
@@ -271,16 +260,25 @@ fn validate_position_liquidation(
 
     all_vault_position_pairs.push((vault_address, position_id, U256::ZERO, U256::ZERO));
 
-    let input_tokens_amount = get_borrower_position_from_rpc(
+    let bp = get_borrower_position_from_rpc(
         &args.rpc_url,
         vault_address,
         position_id,
-        None,
-        // todo: is it ok to request only from the latest block?
-    )?.strategy_balance;
+        Some(target_blocks[0]),
+    )?;
+    let input_tokens_amount = bp.strategy_balance;
+    let strategy_id = bp.strategy_id;
+    let liquidation_price = bp.liquidation_price.to_u128().expect("liquidation price conversion to u128 failed");
+
+    let pendle_amm_address = get_strategy_from_rpc(
+        &args.rpc_url,
+        vault_address,
+        strategy_id,
+        Some(target_blocks[0]),
+    )?.pool;
 
     for &block_number in target_blocks {
-        tracing::debug!("fetching price data for block {}", block_number);
+        tracing::debug!("fetching price data for block {}, pendle amm adress {}, input_tokens_amount {}", block_number, pendle_amm_address, input_tokens_amount);
         let data = collect_price_data_for_block(
             &args.rpc_url,
             block_number,
@@ -290,14 +288,6 @@ fn validate_position_liquidation(
             all_vault_position_pairs.last_mut().expect("unable to get all_vault_position_pairs.last_mut()"),
         )?;
         price_data.push(data);
-    }
-
-    if price_data.is_empty() {
-        anyhow::bail!(
-            "No price data found for strategy {} across {} blocks",
-            pendle_amm_address_str,
-            target_blocks.len()
-        );
     }
 
     let validation = validate_liquidation_price(liquidation_price, &price_data)?;
