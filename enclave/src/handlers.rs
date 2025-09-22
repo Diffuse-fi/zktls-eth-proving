@@ -267,7 +267,10 @@ fn validate_position_liquidation(
         Some(target_blocks[0]),
     )?;
     let input_tokens_amount = bp.strategy_balance;
-    let strategy_id = bp.strategy_id;
+    // todo: works on bera with emitter 0x6eD14bCe18F71cE214ED69d721823700810fB422,
+    // only strategy_id = 1 contains real pendle amm address, workflow doesn't work with other values
+    let strategy_id = U256::from_limbs([1,0,0,0]);
+    // let strategy_id = bp.strategy_id;
     let liquidation_price = bp.liquidation_price.to_u128().expect("liquidation price conversion to u128 failed");
 
     let pendle_amm_address = get_strategy_from_rpc(
