@@ -23,7 +23,22 @@ use crate::{
 #[derive(serde::Deserialize, Debug)]
 pub struct ProvingTask {
     pub vault_address: String,
+    #[serde(deserialize_with = "hex_strings_to_u64")]
     pub position_ids: Vec<u64>,
+}
+
+fn hex_strings_to_u64<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Deserialize;
+    
+    let strings = <Vec<String>>::deserialize(deserializer)?;
+    strings
+        .into_iter()
+        .map(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(serde::de::Error::custom)
 }
 
 #[no_mangle]
@@ -71,11 +86,4 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
             }
         },
     }
-}
-
-pub fn request_stuff_from_dima_s_contract(vault_address: &str, position_id: &u64) -> (u128, String) {
-    (
-        990_000_000_000_000_000u128,
-        "0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed".to_string(),
-    )
 }

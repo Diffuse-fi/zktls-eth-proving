@@ -27,12 +27,21 @@ pub struct BorrowerPosition {
 }
 
 #[derive(Debug, Clone)]
+pub enum StrategyType {
+    None = 0,
+    PendlePt = 1,
+    StrategyMock = 2,
+}
+
+#[derive(Debug, Clone)]
 pub struct StrategyData {
     pub addr: Address,
     pub is_set_up: bool,
+    pub strategy_type: StrategyType,
+    pub is_disabled: bool,
     pub end_date: u64,
     pub borrow_apr: u64,
-    pub balance: u64,
+    pub balance: U256,
     pub assets: U256,
     pub name: String,
     pub pool: Address,
@@ -52,7 +61,7 @@ fn decode_u256_from_hex(hex_str: &str) -> Result<U256> {
     Ok(U256(uint))
 }
 
-fn get_borrower_position_from_rpc(
+pub fn get_borrower_position_from_rpc(
     rpc_url: &str,
     vault_address: Address,
     position_id: u64,
@@ -169,7 +178,7 @@ fn get_borrower_position_from_rpc(
     })
 }
 
-fn get_strategy_from_rpc(
+pub fn get_strategy_from_rpc(
     rpc_url: &str,
     vault_address: Address,
     strategy_id: U256,
@@ -222,7 +231,7 @@ fn get_strategy_from_rpc(
 
     let mut offset = 64;
 
-    if result_hex.len() < 64 + (64 * 9) {
+    if result_hex.len() < 64 + (64 * 10) {
         return Err(anyhow!("Response too short for StrategyData struct"));
     }
 
@@ -236,7 +245,16 @@ fn get_strategy_from_rpc(
     let is_set_up = &result_hex[offset + 63..offset + 64] != "0";
     offset += 64;
 
-    let _is_disabled = &result_hex[offset + 63..offset + 64] != "0";
+    let strategy_type_val = u8::from_str_radix(&result_hex[offset + 62..offset + 64], 16)?;
+    let strategy_type = match strategy_type_val {
+        0 => StrategyType::None,
+        1 => StrategyType::PendlePt,
+        2 => StrategyType::StrategyMock,
+        _ => return Err(anyhow!("Invalid strategy type: {}", strategy_type_val)),
+    };
+    offset += 64;
+
+    let is_disabled = &result_hex[offset + 63..offset + 64] != "0";
     offset += 64;
 
     let end_date = u64::from_str_radix(&result_hex[offset + 54..offset + 64], 16)?;
@@ -245,14 +263,7 @@ fn get_strategy_from_rpc(
     let borrow_apr = u64::from_str_radix(&result_hex[offset + 54..offset + 64], 16)?;
     offset += 64;
 
-    let balance_u256 = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
-
-    let balance = match balance_u256.to_u64() {
-        Some(val) => val,
-        None => {
-            return Err(anyhow!("Balance value too large for u64: {:?}", balance_u256));
-        }
-    };
+    let balance = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
     let assets = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
@@ -273,6 +284,8 @@ fn get_strategy_from_rpc(
     Ok(StrategyData {
         addr,
         is_set_up,
+        strategy_type,
+        is_disabled,
         end_date,
         borrow_apr,
         balance,

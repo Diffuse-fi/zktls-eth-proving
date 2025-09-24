@@ -316,7 +316,7 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
             "count": non_existent_slots.len(),
             "message": "These slots do not exist and are excluded from the final attestation"
         });
-        println!(
+        tracing::info!(
             "{}",
             serde_json::to_string_pretty(&non_existent_json)
                 .unwrap_or_else(|_| "Failed to serialize non-existent slots".to_string())
