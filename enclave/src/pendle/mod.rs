@@ -156,14 +156,15 @@ fn get_yt_index(storage_proving_config: utils::StorageProvingConfig) -> anyhow::
 }
 
 pub struct PendleOutput {
-    pub exact_pt_in: U256,
-    pub exact_sy_out: I256,
+    pub pt_amount: U256,
+    pub sy_amount: I256,
     pub yt_index: U256,
 }
 
 pub fn pendle_logic(
     storage_proving_config: &utils::StorageProvingConfig,
     block_header: Header,
+    sy_to_pt: bool,
 ) -> anyhow::Result<PendleOutput> {
     let market_storage_proving_config = StorageProvingConfig {
         rpc_url: storage_proving_config.rpc_url.clone(),
@@ -239,6 +240,46 @@ pub fn pendle_logic(
         block_timestamp,
     )?;
 
+    if sy_to_pt {
+        let exact_sy_in_expected_unsigned = storage_proving_config.input_tokens_amount;
+        let exact_sy_in_expected = I256::try_from(exact_sy_in_expected_unsigned.0).map_err(|e| anyhow::anyhow!("Failed to convert exact_sy_in_expected_unsigned to I256: {}", e))?;
+
+        let mut pt_out = exact_sy_in_expected_unsigned * /*price*/ exact_pt_in / U256::from_i256(exact_sy_out).unwrap();
+
+        let mut bin_step = pt_out;
+        let two =  U256::from_limbs([2, 0, 0, 0]);
+        loop { 
+            let exact_sy_in = market_math_core::swap_sy_for_exact_pt(
+                market,
+                yt_address_and_index.py_index_current,
+                pt_out,
+                block_timestamp,
+            )?;
+    
+            tracing::info!("bin search step: exact_pt_out: {}, exact_sy_in: {}", pt_out, exact_sy_in);
+
+            if exact_sy_in == exact_sy_in_expected {
+                break;
+            }
+            if bin_step != U256::from_limbs([1,0,0,0]) {
+                bin_step = bin_step / two;
+            }
+            if exact_sy_in < exact_sy_in_expected {
+                pt_out = pt_out + bin_step;
+            } else {
+                pt_out = pt_out - bin_step;
+            }
+        }
+
+        let output = PendleOutput {
+            pt_amount: pt_out,
+            sy_amount: exact_sy_in_expected,
+            yt_index: yt_address_and_index.py_index_current,
+        };
+
+        return Ok(output)
+    }
+
     tracing::info!(
         "storage_proving_config.block_number: {}",
         storage_proving_config.block_number
@@ -255,8 +296,8 @@ pub fn pendle_logic(
     );
 
     let output = PendleOutput {
-        exact_pt_in,
-        exact_sy_out,
+        pt_amount: exact_pt_in,
+        sy_amount: exact_sy_out,
         yt_index: yt_address_and_index.py_index_current,
     };
 

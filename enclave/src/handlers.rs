@@ -134,13 +134,13 @@ pub fn handle_position_creation(
         all_blocks.push((block, block_header.hash()));
 
         let PendleOutput {
-            exact_pt_in,
-            exact_sy_out,
+            pt_amount: exact_pt_in,
+            sy_amount: exact_sy_out,
 
             // should be const for any block, included in quote
             yt_index,
             ..
-        } = pendle_logic(&config, block_header)?;
+        } = pendle_logic(&config, block_header, true)?;
 
         yt_index_quote.push(yt_index);
         let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
@@ -216,17 +216,17 @@ fn collect_price_data_for_block(
         input_tokens_amount,
     };
 
-    let pendle_output = pendle_logic(&storage_proving_config, block_header)
+    let pendle_output = pendle_logic(&storage_proving_config, block_header, false)
         .map_err(|e| anyhow::anyhow!("Pendle logic failed: {}", e))?;
     // TODO it is ok if reverts because not enough liquidity in the pool, still need to liquidate, need to handle properly
 
     latest_position.2 = pendle_output.yt_index;
-    latest_position.3 = U256::from_i256(pendle_output.exact_sy_out * I256::unchecked_from(9) / I256::unchecked_from(10)).expect("unable to convert i256 to u256");
+    latest_position.3 = U256::from_i256(pendle_output.sy_amount * I256::unchecked_from(9) / I256::unchecked_from(10)).expect("unable to convert i256 to u256");
 
     let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
     let input_tokens_amount_unsigned = I256::try_from(input_tokens_amount.0).unwrap();
     
-    let price_from_pendle_amm = pendle_output.exact_sy_out * e18 / input_tokens_amount_unsigned;
+    let price_from_pendle_amm = pendle_output.sy_amount * e18 / input_tokens_amount_unsigned;
     let price_from_pendle_amm_u128: u128 = price_from_pendle_amm.try_into().unwrap();
 
     tracing::debug!(

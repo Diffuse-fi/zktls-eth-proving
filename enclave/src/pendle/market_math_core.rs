@@ -32,6 +32,22 @@ struct MarketPreCompute {
     fee_rate: I256,
 }
 
+pub(super) fn swap_sy_for_exact_pt(
+    market: MarketState,
+    index: U256,
+    exact_pt_to_market: U256,
+    block_time: U256,
+) -> anyhow::Result<I256> {
+    let net_sy_to_account = execute_trade_core(
+        market,
+        index,
+        I256::try_from(exact_pt_to_market.0)?, // function is the same for both directions, this var is neg for pt->sy
+        block_time,
+    )?;
+
+    Ok(net_sy_to_account)
+}
+
 pub(super) fn swap_exact_pt_for_sy(
     market: MarketState,
     index: U256,
@@ -176,7 +192,7 @@ fn calc_trade(
     let net_asset_to_account: I256 = pre_fee_asset_to_account - fee;
 
     let net_sy_to_account: U256 = if net_asset_to_account < I256::ZERO {
-        asset_to_sy_up(index, U256::from_i256(net_asset_to_account).unwrap())
+        asset_to_sy_up(index, U256::from_i256(net_asset_to_account * I256::MINUS_ONE).unwrap())
     } else {
         asset_to_sy(index, U256::from_i256(net_asset_to_account).unwrap())
     };
