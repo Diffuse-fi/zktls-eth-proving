@@ -52,6 +52,7 @@ pub struct ProvingResultOutputLiquidation {
 pub struct ProvingResultOutputBorrowerPosition {
     pub attestation_payload: AttestationPayloadBorrowerPosition,
     pub sgx_quote_hex: String,
+    pub liquidation_price: U256,
 }
 
 #[derive(Serialize, Debug, Clone)]

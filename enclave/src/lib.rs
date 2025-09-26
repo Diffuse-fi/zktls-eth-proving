@@ -3,6 +3,7 @@ mod cli;
 mod error;
 pub(crate) mod eth;
 mod handlers;
+mod math;
 mod mock_v0;
 mod pendle;
 mod trie;
@@ -11,14 +12,12 @@ pub(crate) mod vault_v1;
 
 use automata_sgx_sdk::types::SgxStatus;
 use clap::Parser;
-
 pub use pendle::pendle_logic;
 
 use crate::{
     cli::{CliMode, ZkTlsProverCli},
     handlers::{handle_liquidation, handle_position_creation},
 };
-
 
 #[derive(serde::Deserialize, Debug)]
 pub struct ProvingTask {
@@ -32,7 +31,7 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::Deserialize;
-    
+
     let strings = <Vec<String>>::deserialize(deserializer)?;
     strings
         .into_iter()
@@ -59,30 +58,28 @@ pub unsafe extern "C" fn simple_proving() -> SgxStatus {
     };
 
     match mode {
-        CliMode::Liquidation(args) => {
-            match handle_liquidation(args) {
-                Err(e) => {
-                    eprintln!("Error during liquidation validation: {}", e);
-                    SgxStatus::Unexpected
-                },
-                Ok(proving_result) => {
-                    let output = serde_json::to_string_pretty(&proving_result).expect("serde_json::to_string_pretty liquidation");
-                    println!("{}", output);
-                    SgxStatus::Success
-                },
+        CliMode::Liquidation(args) => match handle_liquidation(args) {
+            Err(e) => {
+                eprintln!("Error during liquidation validation: {}", e);
+                SgxStatus::Unexpected
+            }
+            Ok(proving_result) => {
+                let output = serde_json::to_string_pretty(&proving_result)
+                    .expect("serde_json::to_string_pretty liquidation");
+                println!("{}", output);
+                SgxStatus::Success
             }
         },
-        CliMode::PositionCreation(args) => {
-            match handle_position_creation(args) {
-                Err(e) => {
-                    eprintln!("Error during position creation: {}", e);
-                    SgxStatus::Unexpected
-                },
-                Ok(proving_result) => {
-                    let output = serde_json::to_string_pretty(&proving_result).expect("serde_json::to_string_pretty liquidation");
-                    println!("{}", output);
-                    SgxStatus::Success
-                },
+        CliMode::PositionCreation(args) => match handle_position_creation(args) {
+            Err(e) => {
+                eprintln!("Error during position creation: {}", e);
+                SgxStatus::Unexpected
+            }
+            Ok(proving_result) => {
+                let output = serde_json::to_string_pretty(&proving_result)
+                    .expect("serde_json::to_string_pretty liquidation");
+                println!("{}", output);
+                SgxStatus::Success
             }
         },
     }

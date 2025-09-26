@@ -1,26 +1,31 @@
+use std::str::FromStr;
+
+use ruint::Uint;
+use tracing::info;
+
 use crate::{
-    attestation_data::{AttestationPayloadLiquidation, ProvingResultOutputLiquidation},
+    attestation_data::{
+        AttestationPayloadBorrowerPosition, AttestationPayloadLiquidation,
+        ProvingResultOutputBorrowerPosition, ProvingResultOutputLiquidation,
+    },
     cli::{LiquidationArgs, PositionCreationArgs},
-    eth::aliases::{Address, B256, I256},
+    eth::aliases::{Address, B256, I256, U256},
+    math,
+    math::{calculate_liquidation_price_base_collateral, LiquidationInputs},
     mock_v0::{validate_liquidation_price, PriceData},
-    vault_v1::{get_borrower_position_from_rpc, get_strategy_from_rpc},
-    pendle::pendle_logic,
+    pendle::{pendle_logic, PendleOutput},
     utils::{
-        calculate_final_blocks_hash, calculate_final_positions_hash, construct_report_data_liquidation,
+        calculate_final_blocks_hash, calculate_final_positions_hash, calculate_hash_from_u256,
+        construct_report_data_borrow_position, construct_report_data_liquidation,
         get_block_header_from_rpc, StorageProvingConfig,
     },
+    vault_v1::{
+        get_borrower_position_from_rpc, get_pending_borrow_request_data, get_strategy_from_rpc,
+    },
 };
-use std::str::FromStr;
-use tracing::info;
-use crate::attestation_data::{AttestationPayloadBorrowerPosition, ProvingResultOutputBorrowerPosition};
-use crate::eth::aliases::U256;
-use crate::pendle::PendleOutput;
-use crate::utils::{calculate_hash_from_u256, construct_report_data_borrow_position};
-use crate::vault_v1::get_pending_borrow_request_data;
+use crate::vault_v1::get_spread_fee_from_rpc;
 
-pub fn handle_liquidation(
-    args: LiquidationArgs,
-) -> anyhow::Result<ProvingResultOutputLiquidation> {
+pub fn handle_liquidation(args: LiquidationArgs) -> anyhow::Result<ProvingResultOutputLiquidation> {
     let proving_tasks: Vec<crate::ProvingTask> = serde_json::from_str(&args.proving_tasks)
         .map_err(|e| anyhow::anyhow!("Failed to parse proving tasks JSON: {}", e))?;
 
@@ -50,15 +55,18 @@ pub fn handle_liquidation(
     let mut all_vault_position_pairs: Vec<(Address, u64, U256, U256)> = Vec::new();
 
     validate_all_liquidation_prices(
-        &proving_tasks, 
-        &target_blocks, 
+        &proving_tasks,
+        &target_blocks,
         &args,
         &mut all_blocks_duplicated,
         &mut all_vault_position_pairs,
     )?;
 
     let all_blocks_size = all_blocks_duplicated.len() / all_vault_position_pairs.len();
-    let all_blocks = all_blocks_duplicated.into_iter().take(all_blocks_size).collect::<Vec<_>>();
+    let all_blocks = all_blocks_duplicated
+        .into_iter()
+        .take(all_blocks_size)
+        .collect::<Vec<_>>();
 
     tracing::info!(
         total_blocks = all_blocks.len(),
@@ -66,19 +74,18 @@ pub fn handle_liquidation(
         "All blocks and tasks completed, validating liquidation prices"
     );
 
-
     for (b, h) in all_blocks.clone() {
         tracing::debug!("all_blocks: {} {}", b, h);
     }
-    
+
     for (a, b, c, d) in all_vault_position_pairs.clone() {
         tracing::debug!("all_vault_position_pairs: {} {} {} {}", a, b, c, d);
     }
 
-
     tracing::info!("Liquidation price validation completed, preparing attestation payload");
 
-    let attestation_payload = create_attestation_payload_liquidation(all_blocks, all_vault_position_pairs)?;
+    let attestation_payload =
+        create_attestation_payload_liquidation(all_blocks, all_vault_position_pairs)?;
     let quote_bytes = generate_sgx_quote_liquidation(&attestation_payload)?;
 
     Ok(ProvingResultOutputLiquidation {
@@ -93,91 +100,122 @@ pub fn handle_position_creation(
     tracing::info!(
         vault_address = %args.vault_address,
         position_id = args.position_id,
-        event_emitter_address = %args.event_emitter_address,
-        threshold = %args.threshold,
-        blocks = %args.block_offsets,
         "Starting position creation proving"
     );
 
     let block_offsets: Vec<i64> = serde_json::from_str(&args.block_offsets)
-        .map_err(|e| anyhow::anyhow!("Failed to parse block offsets JSON: {}", e))?;
-
-    if block_offsets.is_empty() {
-        anyhow::bail!("No block offsets provided");
-    }
+        .map_err(|e| anyhow::anyhow!("Failed to parse block offsets: {}", e))?;
 
     let target_blocks = calculate_target_blocks(&args.rpc_url, &block_offsets)?;
-    let vault_address = Address::from_str(&args.vault_address)
-        .map_err(|e| anyhow::anyhow!("Invalid vault address format: {}", e))?;
+    let vault_address = Address::from_str(&args.vault_address)?;
 
-    let (collateral_amount, mut pendle_pool_address) = get_pending_borrow_request_data(&args.rpc_url, vault_address, args.position_id, None)?;
+    let position =
+        get_borrower_position_from_rpc(&args.rpc_url, vault_address, args.position_id, None)?;
 
-    pendle_pool_address = Address::from_str("0x0651c3f8ba59e312529d9a92fcebd8bb159cbaed")?;
-    // core logic
-    let mut yt_index_quote = Vec::with_capacity(target_blocks.len());
-    let mut prices = Vec::with_capacity(target_blocks.len());
+    let strategy = get_strategy_from_rpc(&args.rpc_url, vault_address, position.strategy_id, None)?;
+
+    let pendle_pool_address = strategy.pool;
+
+    let total_assets_to_swap_pt = U256(position.assets_borrowed.0 + position.collateral_given.0);
+
+    // Calculate TWAP for deposit price
+    let mut sy_amounts_sum = I256::ZERO;
     let mut all_blocks = Vec::with_capacity(target_blocks.len());
+    let mut yt_indices = Vec::with_capacity(target_blocks.len());
 
-    // todo: prove storage slots from event_emitter contract (collateralType, collateralAmount, ...)
-    for block in target_blocks {
+    for &block in &target_blocks {
         let config = StorageProvingConfig {
             rpc_url: args.rpc_url.clone(),
             address: pendle_pool_address,
-            storage_slots: vec![], // no need
+            storage_slots: vec![],
             block_number: block,
-            input_tokens_amount: U256::from_limbs([collateral_amount, 0, 0, 0]),
+            input_tokens_amount: total_assets_to_swap_pt,
         };
-        let hex_block_number = format!("0x{:x}", block);
-        let block_header =
-            get_block_header_from_rpc(&args.rpc_url.clone(), &hex_block_number)?;
 
+        let hex_block_number = format!("0x{:x}", block);
+        let block_header = get_block_header_from_rpc(&args.rpc_url, &hex_block_number)?;
         all_blocks.push((block, block_header.hash()));
 
         let PendleOutput {
-            pt_amount: exact_pt_in,
             sy_amount: exact_sy_out,
-
-            // should be const for any block, included in quote
             yt_index,
             ..
-        } = pendle_logic(&config, block_header, true)?;
+        } = pendle_logic(&config, block_header, false)?;
 
-        yt_index_quote.push(yt_index);
-        let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
-        let exact_pt_in_signed = I256::try_from(exact_pt_in.0).map_err(|e| anyhow::anyhow!("Failed to convert exact_pt_in to I256: {}", e))?;
-        let current_price = (exact_sy_out * e18) / exact_pt_in_signed;
-        prices.push(current_price);
+        sy_amounts_sum = sy_amounts_sum + exact_sy_out;
+        yt_indices.push(yt_index);
     }
 
-    let mut sum = I256::ZERO;
-    let prices_count = I256::try_from(prices.len()).map_err(|e| anyhow::anyhow!("Failed to convert prices length to I256: {}", e))?;
-    for price in &prices {
-        sum += *price;
-    }
-    let twap_current_price = sum / prices_count;
+    let blocks_count = I256::try_from(Uint::<256, 4>::from(target_blocks.len()))
+        .map_err(|e| anyhow::anyhow!("Failed to convert length: {}", e))?;
+    let sy_received_twap = sy_amounts_sum / blocks_count;
+    let sy_received_twap_u256 = math::i256_to_u256(sy_received_twap)?;
 
-    // todo: change to pendle liquidation price calculation using (twap_price, fee_liq, leverage)
-    let liqudation_price = U256::from_str("1100000000000000000").unwrap();
+    let deposit_price_wad = math::div_wad(sy_received_twap_u256, total_assets_to_swap_pt);
 
-    info!("Position creation validation completed, preparing attestation payload");
+    let latest_block_header = get_block_header_from_rpc(&args.rpc_url, "latest")?;
+    let current_timestamp = latest_block_header.timestamp;
+    let end_date_timestamp = strategy.end_date;
 
-    if !yt_index_quote.windows(2).all(|w| w[0] == w[1]) {
-        todo!("yt_index should be the same for all of the blocks in TWAP")
-    }
+    let days_until_maturity = if current_timestamp < end_date_timestamp {
+        (end_date_timestamp - current_timestamp) / 86400
+    } else {
+        0
+    };
 
-    let attestation_payload = create_attestation_payload_borrow_position(all_blocks, yt_index_quote.first().expect("We don't have any yt_index").clone(), liqudation_price)?;
+    let borrow_apr_u256 = U256(Uint::from(strategy.borrow_apr));
+    let multiplier = U256(Uint::from(10u64).pow(Uint::from(14u64)));
+    let borrowing_apy_wad = U256(borrow_apr_u256.0.saturating_mul(multiplier.0));
+
+    let spread_fee_raw = get_spread_fee_from_rpc(
+        &args.rpc_url,
+        vault_address,
+        None, // latest
+    )?;
+
+    let spread_fee_wad = U256(Uint::from(spread_fee_raw).saturating_mul(Uint::from(10u64).pow(Uint::from(14u64))));
+
+    let inputs = LiquidationInputs {
+        q_borrowed: position.assets_borrowed,
+        q_collateral: position.collateral_given,
+        deposit_price_wad,
+        borrowing_apy_wad,
+        spread_fee_wad,
+        days_until_maturity,
+        p_mint_wad: math::wad(),
+        p_redeem_wad: math::wad(),
+    };
+
+    let liquidation_price = calculate_liquidation_price_base_collateral(&inputs)?;
+
+    info!(
+        liquidation_price = %liquidation_price.0,
+        liquidation_price_f64 = liquidation_price.to_u128().unwrap_or(0) as f64 / 1e18,
+        deposit_price_wad = %deposit_price_wad.0,
+        deposit_price_f64 = deposit_price_wad.to_u128().unwrap_or(0) as f64 / 1e18,
+        total_pt_swapped = %total_assets_to_swap_pt.0,
+        sy_received_twap = %sy_received_twap_u256.0,
+        "Calculated liquidation price"
+    );
+
+    // todo: verify all YT indices are the same
+    // if !yt_indices.windows(2).all(|w| w[0].0 == w[1].0) {
+    //     return Err(anyhow::anyhow!("YT index changed during TWAP period"));
+    // }
+
+    let attestation_payload =
+        create_attestation_payload_borrow_position(all_blocks, yt_indices[0], liquidation_price)?;
+
     let quote_bytes = generate_sgx_quote_borrower_position(&attestation_payload)?;
 
     Ok(ProvingResultOutputBorrowerPosition {
         attestation_payload,
         sgx_quote_hex: hex::encode(quote_bytes),
+        liquidation_price,
     })
 }
 
-fn calculate_target_blocks(
-    rpc_url: &str,
-    block_offsets: &[i64],
-) -> anyhow::Result<Vec<u64>> {
+fn calculate_target_blocks(rpc_url: &str, block_offsets: &[i64]) -> anyhow::Result<Vec<u64>> {
     let latest_block_header = get_block_header_from_rpc(rpc_url, "latest")?;
     let latest_block_number = latest_block_header.number;
 
@@ -202,7 +240,6 @@ fn collect_price_data_for_block(
     input_tokens_amount: crate::eth::aliases::U256,
     all_blocks: &mut Vec<(u64, B256)>,
     latest_position: &mut (Address, u64, U256, U256),
-
 ) -> anyhow::Result<PriceData> {
     let hex_block_number = format!("0x{:x}", block_number);
     let block_header = get_block_header_from_rpc(rpc_url, &hex_block_number)?;
@@ -221,11 +258,14 @@ fn collect_price_data_for_block(
     // TODO it is ok if reverts because not enough liquidity in the pool, still need to liquidate, need to handle properly
 
     latest_position.2 = pendle_output.yt_index;
-    latest_position.3 = U256::from_i256(pendle_output.sy_amount * I256::unchecked_from(9) / I256::unchecked_from(10)).expect("unable to convert i256 to u256");
+    latest_position.3 = U256::from_i256(
+        pendle_output.sy_amount * I256::unchecked_from(9) / I256::unchecked_from(10),
+    )
+    .expect("unable to convert i256 to u256");
 
     let e18 = I256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]);
     let input_tokens_amount_unsigned = I256::try_from(input_tokens_amount.0).unwrap();
-    
+
     let price_from_pendle_amm = pendle_output.sy_amount * e18 / input_tokens_amount_unsigned;
     let price_from_pendle_amm_u128: u128 = price_from_pendle_amm.try_into().unwrap();
 
@@ -249,10 +289,9 @@ fn validate_position_liquidation(
     position_id: u64,
     target_blocks: &[u64],
     args: &LiquidationArgs,
-    all_blocks: &mut Vec::<(u64, B256)>,
+    all_blocks: &mut Vec<(u64, B256)>,
     all_vault_position_pairs: &mut Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<()> {
-
     let mut price_data: Vec<PriceData> = Vec::new();
 
     let vault_address = Address::from_str(&task.vault_address)
@@ -269,26 +308,37 @@ fn validate_position_liquidation(
     let input_tokens_amount = bp.strategy_balance;
     // todo: works on bera with emitter 0x6eD14bCe18F71cE214ED69d721823700810fB422,
     // only strategy_id = 1 contains real pendle amm address, workflow doesn't work with other values
-    let strategy_id = U256::from_limbs([1,0,0,0]);
+    let strategy_id = U256::from_limbs([1, 0, 0, 0]);
     // let strategy_id = bp.strategy_id;
-    let liquidation_price = bp.liquidation_price.to_u128().expect("liquidation price conversion to u128 failed");
+    let liquidation_price = bp
+        .liquidation_price
+        .to_u128()
+        .expect("liquidation price conversion to u128 failed");
 
     let pendle_amm_address = get_strategy_from_rpc(
         &args.rpc_url,
         vault_address,
         strategy_id,
         Some(target_blocks[0]),
-    )?.pool;
+    )?
+    .pool;
 
     for &block_number in target_blocks {
-        tracing::debug!("fetching price data for block {}, pendle amm adress {}, input_tokens_amount {}", block_number, pendle_amm_address, input_tokens_amount);
+        tracing::debug!(
+            "fetching price data for block {}, pendle amm adress {}, input_tokens_amount {}",
+            block_number,
+            pendle_amm_address,
+            input_tokens_amount
+        );
         let data = collect_price_data_for_block(
             &args.rpc_url,
             block_number,
             pendle_amm_address,
             input_tokens_amount,
             all_blocks,
-            all_vault_position_pairs.last_mut().expect("unable to get all_vault_position_pairs.last_mut()"),
+            all_vault_position_pairs
+                .last_mut()
+                .expect("unable to get all_vault_position_pairs.last_mut()"),
         )?;
         price_data.push(data);
     }
@@ -327,7 +377,14 @@ fn validate_all_liquidation_prices(
 ) -> anyhow::Result<()> {
     for task in proving_tasks {
         for &position_id in &task.position_ids {
-            validate_position_liquidation(task, position_id, target_blocks, args, all_blocks, all_vault_position_pairs)?;
+            validate_position_liquidation(
+                task,
+                position_id,
+                target_blocks,
+                args,
+                all_blocks,
+                all_vault_position_pairs,
+            )?;
         }
     }
     Ok(())

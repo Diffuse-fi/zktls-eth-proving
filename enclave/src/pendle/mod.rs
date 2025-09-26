@@ -5,11 +5,15 @@ mod errors;
 mod market_math_core;
 mod math;
 
-use crate::utils;
+use ruint::Uint;
 
 use crate::{
-    eth::aliases::{Address, B256, I256, U256},
-    eth::header::Header,
+    eth::{
+        aliases::{Address, B256, I256, U256},
+        header::Header,
+    },
+    math::WAD_U128,
+    utils,
     utils::{
         extract_storage_slots_with_merkle_proving, make_http_request, RpcResponse,
         StorageProvingConfig,
@@ -174,10 +178,8 @@ pub fn pendle_logic(
         input_tokens_amount: storage_proving_config.input_tokens_amount,
     };
 
-    let market_storage_storage_slots = extract_storage_slots_with_merkle_proving(
-        &market_storage_proving_config,
-        block_header,
-    )?;
+    let market_storage_storage_slots =
+        extract_storage_slots_with_merkle_proving(&market_storage_proving_config, block_header)?;
     let raw_slot_10 = market_storage_storage_slots.proven_slots[0]
         .value_unhashed
         .0;
@@ -203,7 +205,6 @@ pub fn pendle_logic(
     sy_bytes.copy_from_slice(&raw_slot_10[0..16]);
     let total_sy_from_storage: i128 = i128::from_be_bytes(sy_bytes);
     tracing::debug!("total_sy_from_storage = {}", total_sy_from_storage);
-
 
     let immutables = get_immutables_from_market_state(market_storage_proving_config.clone())
         .map_err(|e| anyhow::anyhow!("Immutables request failed: {:?}", e))?;
@@ -242,32 +243,79 @@ pub fn pendle_logic(
 
     if sy_to_pt {
         let exact_sy_in_expected_unsigned = storage_proving_config.input_tokens_amount;
-        let exact_sy_in_expected = I256::try_from(exact_sy_in_expected_unsigned.0).map_err(|e| anyhow::anyhow!("Failed to convert exact_sy_in_expected_unsigned to I256: {}", e))?;
+        let exact_sy_in_expected = I256::try_from(exact_sy_in_expected_unsigned.0)
+            .map_err(|e| anyhow::anyhow!("Failed to convert to I256: {}", e))?;
 
-        let mut pt_out = exact_sy_in_expected_unsigned * /*price*/ exact_pt_in / U256::from_i256(exact_sy_out).unwrap();
+        let sy_out_u256 = U256(
+            Uint::try_from(exact_sy_out.into_raw())
+                .map_err(|e| anyhow::anyhow!("Failed to convert sy_out to U256: {}", e))?,
+        );
 
-        let mut bin_step = pt_out;
-        let two =  U256::from_limbs([2, 0, 0, 0]);
-        loop { 
+        let initial_price =
+            U256(exact_pt_in.0.saturating_mul(Uint::from(WAD_U128)) / sy_out_u256.0);
+        let mut pt_out = U256(
+            exact_sy_in_expected_unsigned
+                .0
+                .saturating_mul(initial_price.0)
+                / Uint::from(WAD_U128),
+        );
+
+        let two = U256(Uint::from(2u64));
+        let mut bin_step = U256(pt_out.0 / two.0);
+        let min_step = U256(Uint::from(1000u64));
+        let tolerance = I256::try_from(Uint::<256, 4>::from(1000000u64)).unwrap();
+
+        let mut iterations = 0;
+        const MAX_ITERATIONS: u32 = 50;
+
+        loop {
+            iterations += 1;
+            if iterations > MAX_ITERATIONS {
+                tracing::warn!("Binary search reached maximum iterations");
+                break;
+            }
+
             let exact_sy_in = market_math_core::swap_sy_for_exact_pt(
                 market,
                 yt_address_and_index.py_index_current,
                 pt_out,
                 block_timestamp,
             )?;
-    
-            tracing::info!("bin search step: exact_pt_out: {}, exact_sy_in: {}", pt_out, exact_sy_in);
 
-            if exact_sy_in == exact_sy_in_expected {
+            tracing::debug!(
+                "Binary search iteration {}: pt_out={:?}, sy_in={:?}, target={:?}",
+                iterations,
+                pt_out,
+                exact_sy_in,
+                exact_sy_in_expected
+            );
+
+            let diff = if exact_sy_in > exact_sy_in_expected {
+                exact_sy_in - exact_sy_in_expected
+            } else {
+                exact_sy_in_expected - exact_sy_in
+            };
+
+            if diff <= tolerance {
+                tracing::info!("Converged after {} iterations", iterations);
                 break;
             }
-            if bin_step != U256::from_limbs([1,0,0,0]) {
-                bin_step = bin_step / two;
-            }
-            if exact_sy_in < exact_sy_in_expected {
-                pt_out = pt_out + bin_step;
+
+            if bin_step.0 > min_step.0 {
+                bin_step = U256(bin_step.0 / two.0);
             } else {
-                pt_out = pt_out - bin_step;
+                bin_step = min_step;
+            }
+
+            if exact_sy_in < exact_sy_in_expected {
+                pt_out = U256(pt_out.0.saturating_add(bin_step.0));
+            } else {
+                if pt_out.0 > bin_step.0 {
+                    pt_out = U256(pt_out.0 - bin_step.0);
+                } else {
+                    pt_out = U256(Uint::ZERO);
+                    break;
+                }
             }
         }
 
@@ -277,7 +325,7 @@ pub fn pendle_logic(
             yt_index: yt_address_and_index.py_index_current,
         };
 
-        return Ok(output)
+        return Ok(output);
     }
 
     tracing::info!(

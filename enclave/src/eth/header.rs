@@ -51,7 +51,6 @@ pub struct Header {
     #[serde(default)]
     pub requests_hash: Option<B256>, // EIP-7685
 
-
     #[serde(default, rename = "parentProposerPubkey")]
     pub parent_proposer_pubkey: Option<String>,
 

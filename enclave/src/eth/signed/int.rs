@@ -1,7 +1,9 @@
-use super::{utils::*, ParseSignedError, Sign};
 // use alloc::string::String;
 use core::fmt;
+
 use ruint::{BaseConvertError, Uint, UintTryFrom, UintTryTo};
+
+use super::{utils::*, ParseSignedError, Sign};
 
 /// Signed integer wrapping a `ruint::Uint`.
 ///
@@ -551,11 +553,15 @@ impl<const BITS: usize, const LIMBS: usize> Signed<BITS, LIMBS> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::eth::aliases::I256;
-    use crate::eth::signed::{BigIntConversionError, ParseSignedError};
     use core::ops::Neg;
+
     use ruint::{aliases::U256, BaseConvertError, ParseError};
+
+    use super::*;
+    use crate::eth::{
+        aliases::I256,
+        signed::{BigIntConversionError, ParseSignedError},
+    };
 
     // type U2 = Uint<2, 1>;
 

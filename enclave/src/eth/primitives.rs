@@ -1,14 +1,15 @@
-use core::fmt;
-use core::ops::{Add, Div, Mul, Sub};
-
+use core::{
+    fmt,
+    ops::{Add, Div, Mul, Sub},
+};
 use std::str::FromStr;
-
-use crate::eth::aliases::{B256, I256, U256};
 
 use hex::FromHexError;
 use rlp::{Encodable, RlpStream};
 use ruint::Uint;
 use serde::{Serialize, Serializer};
+
+use crate::eth::aliases::{B256, I256, U256};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FixedBytes<const N: usize>(pub [u8; N]);
@@ -112,7 +113,6 @@ impl Serialize for U256 {
         serializer.serialize_str(&self.0.to_string())
     }
 }
-
 
 impl fmt::Display for U256 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

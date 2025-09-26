@@ -1,9 +1,36 @@
-use crate::eth::aliases::{Address, U256};
 use anyhow::{anyhow, Result};
 use ruint::Uint;
 use serde_json::Value;
 use tracing::info;
-use crate::utils::make_http_request;
+
+use crate::{
+    eth::aliases::{Address, U256},
+    utils::make_http_request,
+};
+
+pub fn get_pending_borrow_request_data(
+    rpc_url: &str,
+    vault_address: Address,
+    position_id: u64,
+    block_number: Option<u64>,
+) -> Result<(u64, Address)> {
+    // 1. get borrower position
+    let position =
+        get_borrower_position_from_rpc(rpc_url, vault_address, position_id, block_number)?;
+    info!("position: {:?}", position);
+
+    // 2. get strategy data
+    let strategy =
+        get_strategy_from_rpc(rpc_url, vault_address, position.strategy_id, block_number)?;
+    info!("strategy: {:?}", strategy);
+
+    let collateral_given = position
+        .collateral_given
+        .to_u64()
+        .ok_or_else(|| anyhow!("Collateral given too large for u64"))?;
+
+    Ok((collateral_given, strategy.pool))
+}
 
 #[derive(Debug, Clone)]
 pub enum CollateralType {
@@ -36,7 +63,6 @@ pub enum StrategyType {
 #[derive(Debug, Clone)]
 pub struct StrategyData {
     pub addr: Address,
-    pub is_set_up: bool,
     pub strategy_type: StrategyType,
     pub is_disabled: bool,
     pub end_date: u64,
@@ -45,13 +71,17 @@ pub struct StrategyData {
     pub assets: U256,
     pub name: String,
     pub pool: Address,
+    // and other fields
 }
 
 fn decode_u256_from_hex(hex_str: &str) -> Result<U256> {
     let bytes = hex::decode(hex_str)?;
 
     if bytes.len() != 32 {
-        return Err(anyhow!("Invalid U256 hex string length: expected 32 bytes, got {}", bytes.len()));
+        return Err(anyhow!(
+            "Invalid U256 hex string length: expected 32 bytes, got {}",
+            bytes.len()
+        ));
     }
 
     let mut byte_array = [0u8; 32];
@@ -78,15 +108,15 @@ pub fn get_borrower_position_from_rpc(
     };
 
     let rpc_payload = serde_json::json!({
-          "jsonrpc": "2.0",
-          "method": "eth_call",
-          "params": [{
-              "to": format!("0x{}", hex::encode(vault_address.as_ref())),
-              "data": calldata
-          }, block_param],
-          "id": 1
-      })
-        .to_string();
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{
+            "to": format!("0x{}", hex::encode(vault_address.as_ref())),
+            "data": calldata
+        }, block_param],
+        "id": 1
+    })
+    .to_string();
 
     tracing::info!(%vault_address, position_id, "Fetching borrower position");
 
@@ -99,9 +129,15 @@ pub fn get_borrower_position_from_rpc(
     if let Some(error) = rpc_response.get("error") {
         return Err(anyhow!(
             "RPC call failed: {} (code: {}), data: {}",
-            error.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error"),
+            error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error"),
             error.get("code").and_then(|v| v.as_i64()).unwrap_or(-1),
-            error.get("data").and_then(|v| v.as_str()).unwrap_or("No data")
+            error
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No data")
         ));
     }
 
@@ -140,7 +176,6 @@ pub fn get_borrower_position_from_rpc(
 
     let assets_borrowed = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
-
 
     let collateral_given = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
@@ -204,7 +239,7 @@ pub fn get_strategy_from_rpc(
         }, block_param],
         "id": 1
     })
-        .to_string();
+    .to_string();
 
     info!(%vault_address, ?strategy_id, "Fetching strategy data");
 
@@ -217,9 +252,15 @@ pub fn get_strategy_from_rpc(
     if let Some(error) = rpc_response.get("error") {
         return Err(anyhow!(
             "RPC call failed: {} (code: {}), data: {}",
-            error.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error"),
+            error
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error"),
             error.get("code").and_then(|v| v.as_i64()).unwrap_or(-1),
-            error.get("data").and_then(|v| v.as_str()).unwrap_or("No data")
+            error
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or("No data")
         ));
     }
 
@@ -231,7 +272,7 @@ pub fn get_strategy_from_rpc(
 
     let mut offset = 64;
 
-    if result_hex.len() < 64 + (64 * 10) {
+    if result_hex.len() < offset + (12 * 64) {
         return Err(anyhow!("Response too short for StrategyData struct"));
     }
 
@@ -240,9 +281,6 @@ pub fn get_strategy_from_rpc(
     let mut addr_array = [0u8; 20];
     addr_array.copy_from_slice(&addr_bytes);
     let addr = Address::from(addr_array);
-    offset += 64;
-
-    let is_set_up = &result_hex[offset + 63..offset + 64] != "0";
     offset += 64;
 
     let strategy_type_val = u8::from_str_radix(&result_hex[offset + 62..offset + 64], 16)?;
@@ -257,10 +295,10 @@ pub fn get_strategy_from_rpc(
     let is_disabled = &result_hex[offset + 63..offset + 64] != "0";
     offset += 64;
 
-    let end_date = u64::from_str_radix(&result_hex[offset + 54..offset + 64], 16)?;
+    let end_date = u64::from_str_radix(&result_hex[offset + 48..offset + 64], 16)?;
     offset += 64;
 
-    let borrow_apr = u64::from_str_radix(&result_hex[offset + 54..offset + 64], 16)?;
+    let borrow_apr = u64::from_str_radix(&result_hex[offset + 48..offset + 64], 16)?;
     offset += 64;
 
     let balance = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
@@ -269,7 +307,7 @@ pub fn get_strategy_from_rpc(
     let assets = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
-    let _string_offset = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
+    let name_offset = decode_u256_from_hex(&result_hex[offset..offset + 64])?;
     offset += 64;
 
     let pool_hex = &result_hex[offset + 24..offset + 64];
@@ -283,7 +321,6 @@ pub fn get_strategy_from_rpc(
 
     Ok(StrategyData {
         addr,
-        is_set_up,
         strategy_type,
         is_disabled,
         end_date,
@@ -295,22 +332,59 @@ pub fn get_strategy_from_rpc(
     })
 }
 
-pub fn get_pending_borrow_request_data(
+pub fn get_spread_fee_from_rpc(
     rpc_url: &str,
     vault_address: Address,
-    position_id: u64,
     block_number: Option<u64>,
-) -> Result<(u64, Address)> {
-    // 1. get borrower position
-    let position = get_borrower_position_from_rpc(rpc_url, vault_address, position_id, block_number)?;
-    info!("position: {:?}", position);
+) -> Result<u64> {
+    let function_selector = "0x2e9e7ac3";  // getSpreadFee()
+    let calldata = function_selector.to_string();
 
-    // 2. get strategy data
-    let strategy = get_strategy_from_rpc(rpc_url, vault_address, position.strategy_id, block_number)?;
-    info!("strategy: {:?}", strategy);
+    let block_param = match block_number {
+        Some(num) => format!("0x{:x}", num),
+        None => "latest".to_string(),
+    };
 
-    let collateral_given = position.collateral_given.to_u64()
-        .ok_or_else(|| anyhow!("Collateral given too large for u64"))?;
+    let rpc_payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{
+            "to": format!("0x{}", hex::encode(vault_address.as_ref())),
+            "data": calldata
+        }, block_param],
+        "id": 1
+    })
+        .to_string();
 
-    Ok((collateral_given, strategy.pool))
+    info!(%vault_address, "Fetching spread fee");
+
+    let response_str = make_http_request(rpc_url, "POST", rpc_payload.as_bytes())
+        .map_err(|e| anyhow!("HTTP request for spread fee failed: {:?}", e))?;
+
+    let rpc_response: Value = serde_json::from_str(&response_str)
+        .map_err(|e| anyhow!("Failed to parse spread fee RPC response: {}", e))?;
+
+    if let Some(error) = rpc_response.get("error") {
+        return Err(anyhow!(
+            "RPC call failed: {} (code: {})",
+            error.get("message").and_then(|v| v.as_str()).unwrap_or("Unknown error"),
+            error.get("code").and_then(|v| v.as_i64()).unwrap_or(-1)
+        ));
+    }
+
+    let result_hex = rpc_response["result"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing result in RPC response"))?;
+
+    let result_hex = result_hex.strip_prefix("0x").unwrap_or(result_hex);
+
+    if result_hex.len() < 64 {
+        return Err(anyhow!("Response too short for uint16"));
+    }
+
+    let spread_fee = u64::from_str_radix(&result_hex[60..64], 16)?;
+
+    info!(spread_fee = %spread_fee, "Retrieved spread fee");
+
+    Ok(spread_fee)
 }

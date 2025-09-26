@@ -1,7 +1,8 @@
 //! Type aliases for common primitive types.
 
-use crate::eth::{primitives::FixedBytes, signed::Signed};
 use ruint::Uint;
+
+use crate::eth::{primitives::FixedBytes, signed::Signed};
 
 #[derive(Clone, Copy, Hash, Debug, PartialEq)]
 pub struct U256(pub Uint<256, 4>);
@@ -11,7 +12,6 @@ pub type B64 = FixedBytes<8>;
 pub type B256 = FixedBytes<32>;
 pub type Address = FixedBytes<20>;
 pub type Bloom256 = FixedBytes<256>;
-
 
 impl U256 {
     pub fn to_u64(&self) -> Option<u64> {

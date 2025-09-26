@@ -150,12 +150,13 @@ mod tests {
             },
         ];
 
-        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
+        let validation =
+            validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
         assert!(validation.is_valid);
         assert!(validation.reason.is_none());
     }
 
-        #[test]
+    #[test]
     fn test_validate_liquidation_price_zero() {
         let price_data = vec![
             PriceData {
@@ -168,7 +169,8 @@ mod tests {
             },
         ];
 
-        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
+        let validation =
+            validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
         assert!(validation.is_valid);
         assert!(validation.reason.is_none());
     }
@@ -180,7 +182,8 @@ mod tests {
             price: 2_000_000_000_000_000_000,
         }];
 
-        let validation = validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
+        let validation =
+            validate_liquidation_price(1_000_000_000_000_000_000, &price_data).unwrap();
         assert!(!validation.is_valid);
         assert!(validation.reason.is_some());
     }

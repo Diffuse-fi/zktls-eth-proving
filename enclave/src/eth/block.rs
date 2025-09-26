@@ -1,9 +1,10 @@
+use serde::Deserialize;
+
 use crate::eth::{
     aliases::{Address, B256},
     de,
     header::Header,
 };
-use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

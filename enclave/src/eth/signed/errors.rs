@@ -1,4 +1,5 @@
 use core::fmt;
+
 use ruint::BaseConvertError;
 
 /// The error type that is returned when parsing a signed integer.

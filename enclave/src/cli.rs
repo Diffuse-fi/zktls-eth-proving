@@ -1,5 +1,7 @@
 use std::str::FromStr;
+
 use clap::Parser;
+
 use crate::eth::aliases::U256;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -31,7 +33,7 @@ impl FromStr for PoolType {
 pub struct ZkTlsProverCli {
     #[clap(long, help = "Enable position creation mode")]
     pub position_creation: bool,
-    
+
     #[clap(
         long,
         short = 'u',
@@ -39,21 +41,21 @@ pub struct ZkTlsProverCli {
         help = "Ethereum RPC endpoint URL (e.g., https://eth-mainnet.alchemyapi.io/v2/YOUR_API_KEY)"
     )]
     pub rpc_url: Option<String>,
-    
+
     #[clap(
         long,
         short = 'o',
         help = "Block offsets from latest as JSON array, e.g., '[0,-1,-5,-20,-25]'"
     )]
     pub block_offsets: Option<String>,
-    
+
     #[clap(
         long,
         short = 't',
         help = "JSON array of proving tasks, e.g., '[{\"vault_address\":\"0xabc...\",\"position_ids\":[0, 1, 20]}]'"
     )]
     pub proving_tasks: Option<String>,
-    
+
     #[clap(
         long,
         short = 'p',
@@ -61,19 +63,19 @@ pub struct ZkTlsProverCli {
         help = "Choose either pool type to calculate price impact(uniswap3, pendle)"
     )]
     pub pool_type: PoolType,
-    
+
     #[clap(long, help = "Vault address for position creation mode")]
     pub vault_address: Option<String>,
-    
+
     #[clap(long, help = "Position ID for position creation mode")]
     pub position_id: Option<u64>,
-    
+
     #[clap(long, help = "Event emitter address for position creation mode")]
     pub event_emitter_address: Option<String>,
-    
+
     #[clap(long, help = "Threshold for position creation mode")]
     pub threshold: Option<String>,
-    
+
     #[clap(long, help = "Blocks configuration for position creation mode")]
     pub blocks: Option<String>,
 }
@@ -104,31 +106,40 @@ pub enum CliMode {
 
 impl TryFrom<ZkTlsProverCli> for CliMode {
     type Error = anyhow::Error;
-    
+
     fn try_from(cli: ZkTlsProverCli) -> Result<Self, Self::Error> {
         if cli.position_creation {
             Ok(CliMode::PositionCreation(PositionCreationArgs {
-                vault_address: cli.vault_address
-                    .ok_or_else(|| anyhow::anyhow!("vault-address is required for position creation mode"))?,
-                position_id: cli.position_id
-                    .ok_or_else(|| anyhow::anyhow!("position-id is required for position creation mode"))?,
-                event_emitter_address: cli.event_emitter_address
-                    .ok_or_else(|| anyhow::anyhow!("event-emitter-address is required for position creation mode"))?,
-                threshold: cli.threshold
-                    .ok_or_else(|| anyhow::anyhow!("threshold is required for position creation mode"))?,
-                block_offsets: cli.block_offsets
-                    .ok_or_else(|| anyhow::anyhow!("block-offsets is required for position creation mode"))?,
-                rpc_url: cli.rpc_url
-                    .ok_or_else(|| anyhow::anyhow!("rpc-url is required for position creation mode"))?,
+                vault_address: cli.vault_address.ok_or_else(|| {
+                    anyhow::anyhow!("vault-address is required for position creation mode")
+                })?,
+                position_id: cli.position_id.ok_or_else(|| {
+                    anyhow::anyhow!("position-id is required for position creation mode")
+                })?,
+                event_emitter_address: cli.event_emitter_address.ok_or_else(|| {
+                    anyhow::anyhow!("event-emitter-address is required for position creation mode")
+                })?,
+                threshold: cli.threshold.ok_or_else(|| {
+                    anyhow::anyhow!("threshold is required for position creation mode")
+                })?,
+                block_offsets: cli.block_offsets.ok_or_else(|| {
+                    anyhow::anyhow!("block-offsets is required for position creation mode")
+                })?,
+                rpc_url: cli.rpc_url.ok_or_else(|| {
+                    anyhow::anyhow!("rpc-url is required for position creation mode")
+                })?,
             }))
         } else {
             Ok(CliMode::Liquidation(LiquidationArgs {
-                rpc_url: cli.rpc_url
+                rpc_url: cli
+                    .rpc_url
                     .ok_or_else(|| anyhow::anyhow!("rpc-url is required for liquidation mode"))?,
-                block_offsets: cli.block_offsets
-                    .ok_or_else(|| anyhow::anyhow!("block-offsets is required for liquidation mode"))?,
-                proving_tasks: cli.proving_tasks
-                    .ok_or_else(|| anyhow::anyhow!("proving-tasks is required for liquidation mode"))?,
+                block_offsets: cli.block_offsets.ok_or_else(|| {
+                    anyhow::anyhow!("block-offsets is required for liquidation mode")
+                })?,
+                proving_tasks: cli.proving_tasks.ok_or_else(|| {
+                    anyhow::anyhow!("proving-tasks is required for liquidation mode")
+                })?,
                 pool_type: cli.pool_type,
             }))
         }

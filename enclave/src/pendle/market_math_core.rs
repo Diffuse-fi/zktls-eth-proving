@@ -3,8 +3,10 @@
 
 use crate::{
     eth::aliases::{I256, U256},
-    pendle::errors::*,
-    pendle::math::{exp, ln},
+    pendle::{
+        errors::*,
+        math::{exp, ln},
+    },
 };
 
 pub const IMPLIED_RATE_TIME: U256 = U256::from_limbs([86400 * 365, 0, 0, 0]);
@@ -192,7 +194,10 @@ fn calc_trade(
     let net_asset_to_account: I256 = pre_fee_asset_to_account - fee;
 
     let net_sy_to_account: U256 = if net_asset_to_account < I256::ZERO {
-        asset_to_sy_up(index, U256::from_i256(net_asset_to_account * I256::MINUS_ONE).unwrap())
+        asset_to_sy_up(
+            index,
+            U256::from_i256(net_asset_to_account * I256::MINUS_ONE).unwrap(),
+        )
     } else {
         asset_to_sy(index, U256::from_i256(net_asset_to_account).unwrap())
     };

@@ -1,10 +1,14 @@
+use std::{collections::HashMap, ffi::CString, os::raw::c_char};
+
 use anyhow::Result;
 use serde::Deserialize;
-use std::{collections::HashMap, ffi::CString, os::raw::c_char};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::{
-    attestation_data::{AttestationPayloadLiquidation, SlotProofData, SlotsProofPayload},
+    attestation_data::{
+        AttestationPayloadBorrowerPosition, AttestationPayloadLiquidation, SlotProofData,
+        SlotsProofPayload,
+    },
     eth::{
         aliases::{Address, B256, U256},
         block::Block,
@@ -13,7 +17,6 @@ use crate::{
     },
     trie::verify_proof,
 };
-use crate::attestation_data::AttestationPayloadBorrowerPosition;
 
 pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut res = [0u8; 32];
@@ -57,7 +60,9 @@ pub(crate) fn calculate_hash_from_u256(value: U256) -> [u8; 32] {
     keccak256(&bytes).into()
 }
 
-pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u64, U256, U256)]) -> [u8; 32] {
+pub(crate) fn calculate_final_positions_hash(
+    vault_position_pairs: &[(Address, u64, U256, U256)],
+) -> [u8; 32] {
     let mut data = Vec::new();
     for (vault_address, position_id, yt_index, min_price) in vault_position_pairs {
         data.extend_from_slice(vault_address.as_ref()); // 20 bytes
@@ -69,14 +74,18 @@ pub(crate) fn calculate_final_positions_hash(vault_position_pairs: &[(Address, u
     keccak256(&data)
 }
 
-pub(crate) fn construct_report_data_liquidation(payload: &AttestationPayloadLiquidation) -> Result<[u8; 64]> {
+pub(crate) fn construct_report_data_liquidation(
+    payload: &AttestationPayloadLiquidation,
+) -> Result<[u8; 64]> {
     let mut report_data = [0u8; 64];
     report_data[0..32].copy_from_slice(payload.final_blocks_hash.as_ref());
     report_data[32..64].copy_from_slice(payload.final_positions_hash.as_ref());
     Ok(report_data)
 }
 
-pub(crate) fn construct_report_data_borrow_position(payload: &AttestationPayloadBorrowerPosition) -> Result<[u8; 64]> {
+pub(crate) fn construct_report_data_borrow_position(
+    payload: &AttestationPayloadBorrowerPosition,
+) -> Result<[u8; 64]> {
     let mut report_data = [0u8; 64];
     report_data[0..32].copy_from_slice(payload.final_blocks_hash.as_ref());
     report_data[32..64].copy_from_slice(payload.payload_hash.as_ref());
@@ -167,10 +176,7 @@ pub(crate) fn make_http_request(url: &str, method: &str, body: &[u8]) -> anyhow:
     Ok(response_str)
 }
 
-pub fn get_block_header_from_rpc(
-    rpc_url: &str,
-    block_tag: &str,
-) -> anyhow::Result<Header> {
+pub fn get_block_header_from_rpc(rpc_url: &str, block_tag: &str) -> anyhow::Result<Header> {
     tracing::info!(block_tag, "Fetching block header");
 
     let rpc_payload = serde_json::json!({
@@ -275,9 +281,8 @@ pub(crate) fn extract_storage_slots_with_merkle_proving(
         target_slot_keys,
         block_number_val,
     )?;
-    let verified_slot_values =
-        verify_proof(proof_response, block_header.state_root.as_ref())
-            .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
+    let verified_slot_values = verify_proof(proof_response, block_header.state_root.as_ref())
+        .map_err(|e| anyhow::anyhow!("MPT proof verification failed: {:?}", e))?;
     tracing::info!("MPT proof verification successful");
 
     let mut processed_semantic_values: HashMap<B256, [u8; 32]> = HashMap::new();

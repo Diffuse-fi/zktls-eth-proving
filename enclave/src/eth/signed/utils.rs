@@ -1,5 +1,6 @@
-use crate::eth::signed::Signed;
 use ruint::Uint;
+
+use crate::eth::signed::Signed;
 
 /// Panic if overflow on debug mode.
 #[inline]
