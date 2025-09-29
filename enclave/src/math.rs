@@ -81,6 +81,49 @@ pub fn calculate_liquidation_price_base_collateral(inputs: &LiquidationInputs) -
     Ok(liq_price)
 }
 
+pub fn calculate_liquidation_price_pt_collateral(inputs: &LiquidationInputs) -> Result<U256> {
+    let days_u256 = U256(Uint::from(inputs.days_until_maturity));
+    let year_days = U256(Uint::from(365u64));
+
+    let borrowing_factor_wad = U256(
+        (inputs.borrowing_apy_wad.0 + inputs.spread_fee_wad.0).saturating_mul(days_u256.0)
+            / year_days.0,
+    );
+
+    let one_plus_borrowing_factor = U256(wad().0 + borrowing_factor_wad.0);
+
+    let redemption_factor_wad = mul_wad(inputs.p_redeem_wad, inputs.p_mint_wad);
+    if redemption_factor_wad.0.is_zero() {
+        return Err(anyhow!("Redemption/Mint factor cannot be zero"));
+    }
+    let inv_redemption_factor = inv_wad(redemption_factor_wad);
+
+    if inputs.deposit_price_wad.0.is_zero() {
+        return Err(anyhow!("Deposit price cannot be zero"));
+    }
+
+    let collateral_in_intermediate_terms = div_wad(
+        inputs.q_collateral,
+        mul_wad(inputs.p_mint_wad, inputs.deposit_price_wad),
+    );
+
+    let denominator = U256(collateral_in_intermediate_terms.0 + inputs.q_borrowed.0);
+    if denominator.0.is_zero() {
+        return Err(anyhow!("Denominator cannot be zero"));
+    }
+
+    let leverage_ratio = div_wad(inputs.q_borrowed, denominator);
+
+    let price_and_borrow_component = div_wad(one_plus_borrowing_factor, inputs.deposit_price_wad);
+
+    let liq_price = mul_wad(
+        mul_wad(inv_redemption_factor, leverage_ratio),
+        price_and_borrow_component,
+    );
+
+    Ok(liq_price)
+}
+
 pub fn abs_diff_u256(a: U256, b: U256) -> U256 {
     if a.0 > b.0 {
         U256(a.0 - b.0)

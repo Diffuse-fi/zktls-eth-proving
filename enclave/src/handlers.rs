@@ -11,7 +11,7 @@ use crate::{
     cli::{LiquidationArgs, PositionCreationArgs},
     eth::aliases::{Address, B256, I256, U256},
     math,
-    math::{calculate_liquidation_price_base_collateral, LiquidationInputs},
+    math::{calculate_liquidation_price_base_collateral, calculate_liquidation_price_pt_collateral, LiquidationInputs},
     mock_v0::{validate_liquidation_price, PriceData},
     pendle::{pendle_logic, PendleOutput},
     utils::{
@@ -20,7 +20,7 @@ use crate::{
         get_block_header_from_rpc, StorageProvingConfig,
     },
     vault_v1::{
-        get_borrower_position_from_rpc, get_pending_borrow_request_data, get_strategy_from_rpc,
+        get_borrower_position_from_rpc, get_pending_borrow_request_data, get_strategy_from_rpc, CollateralType,
     },
 };
 use crate::vault_v1::get_spread_fee_from_rpc;
@@ -116,9 +116,19 @@ pub fn handle_position_creation(
 
     let pendle_pool_address = strategy.pool;
 
-    let total_assets_to_swap_pt = U256(position.assets_borrowed.0 + position.collateral_given.0);
+    let total_assets_to_swap_pt = match position.collateral_type {
+        CollateralType::USDC => U256(position.assets_borrowed.0 + position.collateral_given.0),
+        CollateralType::PT => position.assets_borrowed,
+    };
 
-    // Calculate TWAP for deposit price
+    tracing::info!(
+        collateral_type = ?position.collateral_type,
+        total_assets_to_swap_pt = %total_assets_to_swap_pt.0,
+        assets_borrowed = %position.assets_borrowed.0,
+        collateral_given = %position.collateral_given.0,
+        "Calculating total assets to swap based on collateral type"
+    );
+
     let mut sy_amounts_sum = I256::ZERO;
     let mut all_blocks = Vec::with_capacity(target_blocks.len());
     let mut yt_indices = Vec::with_capacity(target_blocks.len());
@@ -186,7 +196,10 @@ pub fn handle_position_creation(
         p_redeem_wad: math::wad(),
     };
 
-    let liquidation_price = calculate_liquidation_price_base_collateral(&inputs)?;
+    let liquidation_price = match position.collateral_type {
+        CollateralType::USDC => calculate_liquidation_price_base_collateral(&inputs)?,
+        CollateralType::PT => calculate_liquidation_price_pt_collateral(&inputs)?,
+    };
 
     info!(
         liquidation_price = %liquidation_price.0,
