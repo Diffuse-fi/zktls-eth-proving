@@ -2,21 +2,17 @@ use rlp::Rlp;
 
 use crate::{
     error::{ProofVerificationError, ProofVerificationResult},
-    eth::{primitives::B256, proof::ProofResponse},
-    timing::{Lap, Timings},
+    eth::{aliases::B256, proof::ProofResponse},
     utils::keccak256,
 };
 
 pub fn verify_proof(
     resp: ProofResponse,
     state_root: &[u8],
-    timings: &mut Timings,
 ) -> ProofVerificationResult<Vec<(B256, Option<Vec<u8>>)>> {
     // 1. Verify the account proof
-    let lap_account = Lap::new("verify_mpt_proof::account");
     let address = resp.address.0.as_slice();
     let storage_root = verify_account_proof(&resp, state_root, address)?;
-    lap_account.stop(timings);
 
     assert_eq!(
         resp.storage_hash.0.as_slice(),
@@ -25,9 +21,7 @@ pub fn verify_proof(
     );
 
     // 2. Verify the storage proof
-    let lap_storage = Lap::new("verify_mpt_proof::storage");
     let values = verify_storage_proof(&resp, &storage_root)?;
-    lap_storage.stop(timings);
 
     Ok(values)
 }

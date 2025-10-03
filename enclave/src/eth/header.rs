@@ -3,7 +3,7 @@ use rlp::encode;
 use serde::Deserialize;
 
 use crate::{
-    eth::{de, primitives::*},
+    eth::{aliases::*, de},
     utils::keccak256,
 };
 
@@ -50,6 +50,9 @@ pub struct Header {
     pub parent_beacon_block_root: Option<B256>,
     #[serde(default)]
     pub requests_hash: Option<B256>, // EIP-7685
+
+    #[serde(default, rename = "parentProposerPubkey")]
+    pub parent_proposer_pubkey: Option<String>,
 
     #[serde(flatten)]
     pub other: Option<serde_json::Value>,
@@ -110,6 +113,12 @@ impl Header {
         }
         if let Some(r) = &self.requests_hash {
             append_encoded_item(&mut rlp_items_concatenated, encode(r));
+        }
+
+        if let Some(ppk) = &self.parent_proposer_pubkey {
+            if let Ok(pubkey_bytes) = hex::decode(ppk.strip_prefix("0x").unwrap_or(ppk)) {
+                append_encoded_item(&mut rlp_items_concatenated, encode(&pubkey_bytes));
+            }
         }
 
         let final_rlp_full_header = rlp_encode_list(rlp_items_concatenated);

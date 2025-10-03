@@ -1,10 +1,15 @@
-use core::fmt;
+use core::{
+    fmt,
+    ops::{Add, Div, Mul, Sub},
+};
 use std::str::FromStr;
 
 use hex::FromHexError;
 use rlp::{Encodable, RlpStream};
 use ruint::Uint;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Serialize, Serializer};
+
+use crate::eth::aliases::{B256, I256, U256};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FixedBytes<const N: usize>(pub [u8; N]);
@@ -71,8 +76,81 @@ impl<const N: usize> Encodable for FixedBytes<N> {
     }
 }
 
-#[derive(Clone, Copy, Hash, Debug)]
-pub struct U256(pub Uint<256, 4>);
+impl FromStr for U256 {
+    type Err = Box<dyn std::error::Error + Send + Sync>;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(U256(Uint::<256, 4>::from_str(s)?))
+    }
+}
+
+impl U256 {
+    pub const ZERO: Self = U256(Uint::<256, 4>::ZERO);
+    pub const ONE: Self = U256(Uint::<256, 4>::from_limbs([1, 0, 0, 0]));
+
+    pub const fn from_limbs(limbs: [u64; 4]) -> Self {
+        U256(Uint::<256, 4>::from_limbs(limbs))
+    }
+
+    pub fn from_i256(value: I256) -> Result<Self, &'static str> {
+        if value.is_negative() {
+            Err("Cannot convert negative I256 to U256")
+        } else {
+            Ok(U256(value.0))
+        }
+    }
+
+    pub const fn from_be_bytes<const BYTES: usize>(bytes: [u8; BYTES]) -> Self {
+        Self(Uint::from_be_bytes::<BYTES>(bytes))
+    }
+}
+
+impl Serialize for U256 {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl fmt::Display for U256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Add for U256 {
+    type Output = U256;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        U256(self.0 + rhs.0)
+    }
+}
+
+impl Sub for U256 {
+    type Output = U256;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        U256(self.0 - rhs.0)
+    }
+}
+
+impl Mul for U256 {
+    type Output = U256;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        U256(self.0 * rhs.0)
+    }
+}
+
+impl Div for U256 {
+    type Output = U256;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        U256(self.0 / rhs.0)
+    }
+}
 
 impl Encodable for U256 {
     fn rlp_append(&self, s: &mut RlpStream) {
@@ -89,11 +167,6 @@ impl Encodable for U256 {
         }
     }
 }
-
-pub type B64 = FixedBytes<8>;
-pub type B256 = FixedBytes<32>;
-pub type Address = FixedBytes<20>;
-pub type Bloom256 = FixedBytes<256>;
 
 impl<const N: usize> AsRef<[u8]> for FixedBytes<N> {
     #[inline]
@@ -118,11 +191,13 @@ impl<const N: usize> Serialize for FixedBytes<N> {
     }
 }
 
-impl<'de> Deserialize<'de> for U256 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        crate::eth::de::hex_u256(deserializer)
+impl B256 {
+    pub const ZERO: Self = FixedBytes([0u8; 32]);
+
+    pub fn from_u8(value: u8) -> Self {
+        B256::from([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, value,
+        ])
     }
 }
