@@ -4,7 +4,6 @@ mod error;
 pub(crate) mod eth;
 mod handlers;
 mod math;
-mod mock_v0;
 mod pendle;
 mod trie;
 mod utils;

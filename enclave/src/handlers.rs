@@ -12,7 +12,6 @@ use crate::{
     eth::aliases::{Address, B256, I256, U256},
     math,
     math::{calculate_liquidation_price_base_collateral, calculate_liquidation_price_pt_collateral, LiquidationInputs},
-    mock_v0::{validate_liquidation_price, PriceData},
     pendle::{pendle_logic, PendleOutput},
     utils::{
         calculate_final_blocks_hash, calculate_final_positions_hash, calculate_hash_from_u256,
@@ -150,7 +149,7 @@ pub fn handle_position_creation(
             sy_amount: exact_sy_out,
             yt_index,
             ..
-        } = pendle_logic(&config, block_header, false)?;
+        } = pendle_logic(&config, block_header, true)?;
 
         sy_amounts_sum = sy_amounts_sum + exact_sy_out;
         yt_indices.push(yt_index);
@@ -253,7 +252,7 @@ fn collect_price_data_for_block(
     input_tokens_amount: crate::eth::aliases::U256,
     all_blocks: &mut Vec<(u64, B256)>,
     latest_position: &mut (Address, u64, U256, U256),
-) -> anyhow::Result<PriceData> {
+) -> anyhow::Result<u128> {
     let hex_block_number = format!("0x{:x}", block_number);
     let block_header = get_block_header_from_rpc(rpc_url, &hex_block_number)?;
     all_blocks.push((block_number, block_header.hash()));
@@ -283,18 +282,14 @@ fn collect_price_data_for_block(
     let price_from_pendle_amm_u128: u128 = price_from_pendle_amm.try_into().unwrap();
 
     tracing::debug!(
-        "input_tokens_amount_unsigned: {}",
-        input_tokens_amount_unsigned
-    );
-    tracing::debug!(
-        "price_from_pendle_amm float: {}",
-        price_from_pendle_amm_u128 as f64 / 1_000_000_000_000_000_000u128 as f64
+        block_number = block_number,
+        input_tokens_amount = %input_tokens_amount_unsigned,
+        price_wad = price_from_pendle_amm_u128,
+        price_f64 = price_from_pendle_amm_u128 as f64 / 1e18,
+        "Collected price data for block"
     );
 
-    Ok(PriceData {
-        block_number,
-        price: price_from_pendle_amm_u128,
-    })
+    Ok(price_from_pendle_amm_u128)
 }
 
 fn validate_position_liquidation(
@@ -305,7 +300,7 @@ fn validate_position_liquidation(
     all_blocks: &mut Vec<(u64, B256)>,
     all_vault_position_pairs: &mut Vec<(Address, u64, U256, U256)>,
 ) -> anyhow::Result<()> {
-    let mut price_data: Vec<PriceData> = Vec::new();
+    let mut prices: Vec<u128> = Vec::new();
 
     let vault_address = Address::from_str(&task.vault_address)
         .map_err(|e| anyhow::anyhow!("Invalid vault address format: {}", e))?;
@@ -318,11 +313,7 @@ fn validate_position_liquidation(
         position_id,
         Some(target_blocks[0]),
     )?;
-    let input_tokens_amount = bp.strategy_balance;
-    // todo: works on bera with emitter 0x6eD14bCe18F71cE214ED69d721823700810fB422,
-    // only strategy_id = 1 contains real pendle amm address, workflow doesn't work with other values
-    let strategy_id = U256::from_limbs([1, 0, 0, 0]);
-    // let strategy_id = bp.strategy_id;
+    let input_tokens_amount = bp.collateral_given + bp.assets_borrowed;
     let liquidation_price = bp
         .liquidation_price
         .to_u128()
@@ -331,19 +322,19 @@ fn validate_position_liquidation(
     let pendle_amm_address = get_strategy_from_rpc(
         &args.rpc_url,
         vault_address,
-        strategy_id,
+        bp.strategy_id,
         Some(target_blocks[0]),
     )?
     .pool;
 
     for &block_number in target_blocks {
         tracing::debug!(
-            "fetching price data for block {}, pendle amm adress {}, input_tokens_amount {}",
-            block_number,
-            pendle_amm_address,
-            input_tokens_amount
+            block_number = block_number,
+            pendle_amm_address = %pendle_amm_address,
+            input_tokens_amount = %input_tokens_amount,
+            "Fetching price data for block"
         );
-        let data = collect_price_data_for_block(
+        let price = collect_price_data_for_block(
             &args.rpc_url,
             block_number,
             pendle_amm_address,
@@ -353,28 +344,33 @@ fn validate_position_liquidation(
                 .last_mut()
                 .expect("unable to get all_vault_position_pairs.last_mut()"),
         )?;
-        price_data.push(data);
+        prices.push(price);
     }
 
-    let validation = validate_liquidation_price(liquidation_price, &price_data)?;
+    if prices.is_empty() {
+        anyhow::bail!("No price data collected for validation");
+    }
 
-    if !validation.is_valid {
+    let price_sum: u128 = prices.iter().sum();
+    let twap_price = price_sum / prices.len() as u128;
+
+    if liquidation_price <= twap_price {
         anyhow::bail!(
-            "Liquidation price validation failed for position {} in vault {}: {}",
+            "Liquidation price validation failed for position {} in vault {}: liquidation_price ({:.6}) <= twap_price ({:.6})",
             position_id,
             task.vault_address,
-            validation
-                .reason
-                .unwrap_or_else(|| "Unknown reason".to_string())
+            liquidation_price as f64 / 1e18,
+            twap_price as f64 / 1e18
         );
     }
 
     tracing::info!(
         vault_address = %task.vault_address,
         position_id = position_id,
-        liquidation_price = validation.liquidation_price,
-        twap_price = validation.twap_price,
-        price_difference_pct = validation.price_difference_pct * 100.0,
+        liquidation_price_wad = liquidation_price,
+        liquidation_price_f64 = liquidation_price as f64 / 1e18,
+        twap_price_wad = twap_price,
+        twap_price_f64 = twap_price as f64 / 1e18,
         "Liquidation price validation passed"
     );
 
